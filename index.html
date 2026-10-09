@@ -62,7 +62,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
     linear-gradient(to bottom, transparent calc(100% - 1px), var(--line-30) 100%),
     linear-gradient(to bottom, transparent calc(100% - 1px), var(--line-15) 100%);
   background-size: 100% var(--hh), 100% calc(var(--hh) / 2), 100% calc(var(--hh) / 4); }
-.grid-body.z0 .col { background-size: 100% var(--hh), 100% calc(var(--hh) / 2), 0 0; }  /* 標準：1時間と30分の線 */
+.grid-body.z0 .col, .grid-body.z1 .col { background-size: 100% var(--hh), 100% calc(var(--hh) / 2), 0 0; }  /* 標準・拡大：1時間と30分の線。15分の線は最大だけ（刻みより細かい線は出さない） */
 .zoom-ctl { display: inline-flex; align-items: center; gap: 4px; }
 .zoom-ctl .lbl { font-size: 11px; color: var(--muted); min-width: 64px; text-align: center; }
 .col.today-col { background-color: #f8fbff; }
@@ -188,13 +188,13 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 
 <script>
 'use strict';
-const APP_VERSION = 'v0.2.3';
+const APP_VERSION = 'v0.2.4';
 const GIST_FILE = 'schedule_data.json';
 const DAY_START = 6, DAY_END = 23;       // 表示する時間帯
 // 拡大レベル：1時間の高さ(px)と、ドラッグの刻み(分)。拡大するほど細かく動かせる（Shift押下中は5分）
 const ZOOMS = [
-  { hh: 48,  snap: 30, label: '標準' },
-  { hh: 96,  snap: 15, label: '拡大' },
+  { hh: 48,  snap: 60, label: '標準' },
+  { hh: 96,  snap: 30, label: '拡大' },
   { hh: 168, snap: 15, label: '最大' },
 ];
 const MIN_H = 6;                          // 枠の最低の高さ(px)
@@ -460,7 +460,9 @@ function bindGrid() {
       const y = e.clientY - col.getBoundingClientRect().top;
       const sn = snapMin(e);
       const m = DAY_START*60 + Math.floor(y / HH * 60 / sn) * sn;
-      openBlock(null, col.dataset.date, fromMin(Math.min(m, 23*60)), fromMin(Math.min(m + 60, 24*60 - sn)));
+      const len = ZOOMS[S.zoom].snap;                       // 新規の枠の長さ＝拡大レベルの刻み（標準30分／拡大15分。Shiftの5分は開始位置だけに使う）
+      const st = Math.min(m, 24*60 - len);
+      openBlock(null, col.dataset.date, fromMin(st), fromMin(st + len));
     });
   });
   document.querySelectorAll('.blk').forEach(el => {
@@ -486,10 +488,12 @@ function onBlkMove(e) {
   if (!d.moved && Math.hypot(dx, dy) < 5) return;
   d.moved = true; d.el.classList.add('dragging');
   const sn = snapMin(e);
-  const dm = Math.round(dy / HH * 60 / sn) * sn;
+  const raw = dy / HH * 60;                                   // 動かした量（分、丸める前）
+  const toGrid = m => Math.round(m / sn) * sn;               // 目盛りの線（刻みの倍数の時刻）に合わせる
   const dur = d.e0 - d.s0;
   if (d.mode === 'move') {
-    d.s = Math.max(DAY_START*60, Math.min(DAY_END*60 - dur, d.s0 + dm)); d.e = d.s + dur;
+    // 開始時刻を目盛りの線に合わせる（8:30の枠も、動かすと9:00などの線に乗る）
+    d.s = Math.max(DAY_START*60, Math.min(DAY_END*60 - dur, toGrid(d.s0 + raw))); d.e = d.s + dur;
     if (!d.b.recurrence && S.view === 'week') {
       d.el.style.pointerEvents = 'none';
       const under = document.elementsFromPoint(e.clientX, e.clientY).find(n => n.classList && n.classList.contains('col'));
@@ -497,7 +501,7 @@ function onBlkMove(e) {
       if (under) d.date = under.dataset.date;
     }
   } else {
-    d.e = Math.max(d.s0 + sn, Math.min(DAY_END*60, d.e0 + dm)); d.s = d.s0;
+    d.e = Math.max(d.s0 + sn, Math.min(DAY_END*60, toGrid(d.e0 + raw))); d.s = d.s0;   // 終了時刻を目盛りの線に合わせる
   }
   d.el.style.transform = `translate(${d.mode === 'move' ? dx : 0}px, ${(d.mode === 'move' ? (d.s - d.s0) / 60 * HH : 0)}px)`;
   if (d.mode === 'resize') d.el.style.height = Math.max(MIN_H, (d.e - d.s) / 60 * HH - 1) + 'px';
