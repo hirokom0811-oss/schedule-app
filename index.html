@@ -169,6 +169,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
   </div>
   <span class="zoom-ctl"><button class="btn" id="zoom-out" onclick="zoomBy(-1)" title="縮小">－</button><span class="lbl" id="zoom-lbl"></span><button class="btn" id="zoom-in" onclick="zoomBy(1)" title="拡大">＋</button></span>
   <span class="spacer"></span>
+  <button class="btn" id="prop-btn" onclick="openProposals()">候補<span class="badge hidden" id="prop-badge2">0</span></button>
   <button class="btn" id="confirm-btn" onclick="confirmWeek()">この週を確定</button>
   <button class="btn" id="review-btn" onclick="openReview()">📝 振り返り</button>
   <button class="btn" onclick="openIcs()">ICS</button>
@@ -187,7 +188,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 
 <script>
 'use strict';
-const APP_VERSION = 'v0.2.2';
+const APP_VERSION = 'v0.2.3';
 const GIST_FILE = 'schedule_data.json';
 const DAY_START = 6, DAY_END = 23;       // 表示する時間帯
 // 拡大レベル：1時間の高さ(px)と、ドラッグの刻み(分)。拡大するほど細かく動かせる（Shift押下中は5分）
@@ -533,6 +534,9 @@ function renderSide() {
   const pend = S.proposals.filter(p => p.status === 'pending');
   const badge = document.getElementById('prop-badge');
   badge.textContent = pend.length; badge.classList.toggle('hidden', !pend.length);
+  const badge2 = document.getElementById('prop-badge2');
+  if (badge2) { badge2.textContent = pend.length; badge2.classList.toggle('hidden', !pend.length); }
+  if (_propModal) renderProposalsModal();
   const pbox = document.getElementById('proposals');
   const shown = pend.filter(p => p.date >= first && p.date <= last).sort((a, b) => a.date.localeCompare(b.date));
   let html = '';
@@ -558,6 +562,14 @@ function proposalHtml(p) {
   else if (p.kind === 'move') what = `${b ? h(b.title || '作業枠') : '(枠なし)'} を ${fmtMD(p.toDate)} ${p.toStart}–${p.toEnd} に移す`;
   return `<div class="prop"><div><b>${fmtMD(p.date)}</b> ${what}</div>${p.reason ? `<div class="why">${h(p.reason)}</div>` : ''}
     <div class="acts"><button class="btn btn-sm btn-primary" onclick="approveProposal('${p.id}')">承認</button><button class="btn btn-sm" onclick="dismissProposal('${p.id}')">却下</button></div></div>`;
+}
+// 候補の一覧（モーダル）：期間に関係なく、承認待ちをすべて日付順に出す。スマホでは候補欄がカレンダーの下で見えにくいため
+let _propModal = false;
+function openProposals() { _propModal = true; renderProposalsModal(); }
+function renderProposalsModal() {
+  const pend = S.proposals.filter(p => p.status === 'pending').sort((a, b) => a.date.localeCompare(b.date));
+  openModal(`<h3>候補（Claudeの提案）${pend.length ? ` ${pend.length}件` : ''}<button class="btn btn-sm" onclick="closeModal()">✕</button></h3>
+    ${pend.map(p => proposalHtml(p)).join('') || '<div class="empty">承認待ちの候補はありません</div>'}`);
 }
 function approveProposal(id) {
   const p = S.proposals.find(x => x.id === id); if (!p) return;
@@ -594,8 +606,8 @@ function suggestFor(b) {
 }
 
 // ───────── modal helpers ─────────
-function openModal(html) { document.getElementById('modal').innerHTML = html; document.getElementById('modal-bg').classList.add('open'); }
-function closeModal() { document.getElementById('modal-bg').classList.remove('open'); document.getElementById('modal').innerHTML = ''; }
+function openModal(html) { if (!/候補（Claudeの提案）/.test(html.slice(0, 80))) _propModal = false; document.getElementById('modal').innerHTML = html; document.getElementById('modal-bg').classList.add('open'); }
+function closeModal() { _propModal = false; document.getElementById('modal-bg').classList.remove('open'); document.getElementById('modal').innerHTML = ''; }
 document.getElementById('modal-bg').addEventListener('mousedown', e => { if (e.target.id === 'modal-bg') closeModal(); });
 
 // ───────── block modal ─────────
