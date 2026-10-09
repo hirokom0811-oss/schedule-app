@@ -10,6 +10,7 @@
 :root {
   --bg: #f6f7f9; --surface: #fff; --border: #dfe3e8; --text: #1f2933; --muted: #6b7785;
   --primary: #2563eb; --primary-soft: #e8efff; --danger: #dc2626; --ok: #16a34a; --warn: #d97706;
+  --line-h: #b8c1cb; --line-30: #ccd3da; --line-15: #dde2e8;   /* 目盛り線：1時間／30分／15分（細かいほど薄いが、見える濃さにする） */
   --t-intro: #dbeafe; --t-intro-b: #3b82f6;
   --t-use: #dcfce7; --t-use-b: #22c55e;
   --t-people: #fef3c7; --t-people-b: #f59e0b;
@@ -55,9 +56,9 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 .time-col div { height: var(--hh); border-bottom: 1px solid var(--border); font-size: 10px; color: var(--muted); padding: 2px 4px; background: var(--bg); }
 .col { position: relative; border-left: 1px solid var(--border);
   background-image:
-    linear-gradient(to bottom, transparent calc(100% - 1px), var(--border) 100%),
-    linear-gradient(to bottom, transparent calc(100% - 1px), #edf0f3 100%),
-    linear-gradient(to bottom, transparent calc(100% - 1px), #f4f6f8 100%);
+    linear-gradient(to bottom, transparent calc(100% - 1px), var(--line-h) 100%),
+    linear-gradient(to bottom, transparent calc(100% - 1px), var(--line-30) 100%),
+    linear-gradient(to bottom, transparent calc(100% - 1px), var(--line-15) 100%);
   background-size: 100% var(--hh), 100% calc(var(--hh) / 2), 100% calc(var(--hh) / 4); }
 .grid-body.z0 .col { background-size: 100% var(--hh), 100% calc(var(--hh) / 2), 0 0; }  /* 標準：1時間と30分の線 */
 .zoom-ctl { display: inline-flex; align-items: center; gap: 4px; }
@@ -177,7 +178,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 
 <script>
 'use strict';
-const APP_VERSION = 'v0.2.0';
+const APP_VERSION = 'v0.2.1';
 const GIST_FILE = 'schedule_data.json';
 const DAY_START = 6, DAY_END = 23;       // 表示する時間帯
 // 拡大レベル：1時間の高さ(px)と、ドラッグの刻み(分)。拡大するほど細かく動かせる（Shift押下中は5分）
@@ -326,6 +327,7 @@ function updateTitle() {
   else t = `${S.cur.replace(/-/g, '/')}(${dowLabel(S.cur)})`;
   document.getElementById('cal-title').textContent = t;
   document.getElementById('confirm-btn').classList.toggle('hidden', S.view === 'month');
+  document.querySelector('.zoom-ctl').classList.toggle('hidden', S.view === 'month');   // 月ビューには時間の目盛りがないので、拡大・縮小は隠す
   document.getElementById('review-btn').classList.toggle('hidden', S.view !== 'day');
 }
 function renderCalendar() {
