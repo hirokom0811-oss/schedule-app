@@ -66,7 +66,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 .zoom-ctl { display: inline-flex; align-items: center; gap: 4px; }
 .zoom-ctl .lbl { font-size: 11px; color: var(--muted); min-width: 64px; text-align: center; }
 .col.today-col { background-color: #f8fbff; }
-.blk { position: absolute; border-radius: 5px; border: 1px solid; padding: 2px 4px; font-size: 11px; overflow: hidden; cursor: pointer; user-select: none; line-height: 1.3; }
+.blk { position: absolute; border-radius: 5px; border: 1px solid; padding: 2px 4px; font-size: 11px; overflow: hidden; cursor: pointer; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; line-height: 1.3; }
 .blk .t { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .blk .tm { color: var(--muted); font-size: 10px; }
 .blk .tk { font-size: 10px; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -83,6 +83,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 .blk .grip { position: absolute; top: 0; right: 0; width: 14px; height: 14px; font-size: 10px; text-align: center; cursor: grab; touch-action: none; color: var(--muted); }
 .blk .resize { position: absolute; left: 0; right: 0; bottom: 0; height: 6px; cursor: ns-resize; touch-action: none; }
 .blk.dragging { opacity: .6; z-index: 10; box-shadow: 0 4px 12px rgba(0,0,0,.25); }
+.blk.lifted { z-index: 10; box-shadow: 0 8px 20px rgba(0,0,0,.35); outline: 2px solid var(--primary); }   /* 長押しで持ち上がった状態 */
 .th-導入 { background: var(--t-intro); border-color: var(--t-intro-b); }
 .th-活用 { background: var(--t-use); border-color: var(--t-use-b); }
 .th-ひとづくり { background: var(--t-people); border-color: var(--t-people-b); }
@@ -188,7 +189,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 
 <script>
 'use strict';
-const APP_VERSION = 'v0.2.4';
+const APP_VERSION = 'v0.3.0';
 const GIST_FILE = 'schedule_data.json';
 const DAY_START = 6, DAY_END = 23;       // 表示する時間帯
 // 拡大レベル：1時間の高さ(px)と、ドラッグの刻み(分)。拡大するほど細かく動かせる（Shift押下中は5分）
@@ -468,14 +469,51 @@ function bindGrid() {
   document.querySelectorAll('.blk').forEach(el => {
     el.addEventListener('click', e => { if (_justDragged) return; openBlock(el.dataset.id, el.dataset.date); });
     el.addEventListener('pointerdown', onBlkDown);
+    // 長押しで持ち上げたあとは、指を動かしても画面がスクロールしないようにする（iOSは非passiveのtouchmoveで止める）
+    el.addEventListener('touchmove', e => { if (_drag && _drag.lifted && e.cancelable) e.preventDefault(); }, { passive: false });
+    el.addEventListener('contextmenu', e => e.preventDefault());   // 長押しのメニュー（コピー等）を出さない
   });
+}
+// ── 長押しで持ち上げて動かす（指での操作）──
+// 短いタップは従来どおり編集画面。LONG_PRESS_MS 動かさずに押し続けると枠が持ち上がり、そのまま指で動かせる。
+// 押している間に指がLONG_PRESS_SLOP以上動いたら、スクロールとみなして持ち上げない。
+const LONG_PRESS_MS = 380, LONG_PRESS_SLOP = 8;
+let _lp = null;
+function armLongPress(e, el) {
+  cancelLongPress();
+  _lp = { el, id: e.pointerId, sx: e.clientX, sy: e.clientY, x: e.clientX, y: e.clientY, timer: setTimeout(liftBlock, LONG_PRESS_MS) };
+  el.addEventListener('pointermove', onLpMove);
+  el.addEventListener('pointerup', cancelLongPress);
+  el.addEventListener('pointercancel', cancelLongPress);
+}
+function onLpMove(e) {
+  const l = _lp; if (!l) return;
+  l.x = e.clientX; l.y = e.clientY;
+  if (Math.hypot(l.x - l.sx, l.y - l.sy) > LONG_PRESS_SLOP) cancelLongPress();
+}
+function cancelLongPress() {
+  const l = _lp; if (!l) return;
+  clearTimeout(l.timer);
+  l.el.removeEventListener('pointermove', onLpMove); l.el.removeEventListener('pointerup', cancelLongPress); l.el.removeEventListener('pointercancel', cancelLongPress);
+  _lp = null;
+}
+function liftBlock() {
+  const l = _lp; if (!l) return;
+  const el = l.el, b = blockById(el.dataset.id);
+  cancelLongPress();
+  if (!b) return;
+  _drag = { el, b, mode: 'move', lifted: true, x0: l.x, y0: l.y, s0: toMin(b.startTime), e0: toMin(b.endTime), date0: el.dataset.date, moved: false, date: el.dataset.date, s: toMin(b.startTime), e: toMin(b.endTime) };
+  try { el.setPointerCapture(l.id); } catch (_) {}
+  el.addEventListener('pointermove', onBlkMove); el.addEventListener('pointerup', onBlkUp); el.addEventListener('pointercancel', onBlkUp);
+  el.classList.add('lifted');
+  try { if (navigator.vibrate) navigator.vibrate(12); } catch (_) {}   // 対応端末のみ。iPhoneのSafariは振動しない
 }
 function onBlkDown(e) {
   if (e.button !== 0) return;
   const el = e.currentTarget;
   const onGrip = e.target.classList.contains('grip'), onResize = e.target.classList.contains('resize');
-  if (e.pointerType === 'touch' && !onGrip && !onResize) return;
   const b = blockById(el.dataset.id); if (!b) return;
+  if (e.pointerType === 'touch' && !onGrip && !onResize) { armLongPress(e, el); return; }   // 指：枠の本体は長押しで持ち上げる
   _drag = { el, b, mode: onResize ? 'resize' : 'move', x0: e.clientX, y0: e.clientY, s0: toMin(b.startTime), e0: toMin(b.endTime), date0: el.dataset.date, moved: false, date: el.dataset.date, s: toMin(b.startTime), e: toMin(b.endTime) };
   try { el.setPointerCapture(e.pointerId); } catch (_) { /* 取得できなくても、要素上の移動は拾える */ }
   el.addEventListener('pointermove', onBlkMove);
@@ -485,7 +523,7 @@ function onBlkDown(e) {
 function onBlkMove(e) {
   const d = _drag; if (!d) return;
   const dx = e.clientX - d.x0, dy = e.clientY - d.y0;
-  if (!d.moved && Math.hypot(dx, dy) < 5) return;
+  if (!d.moved && !d.lifted && Math.hypot(dx, dy) < 5) return;
   d.moved = true; d.el.classList.add('dragging');
   const sn = snapMin(e);
   const raw = dy / HH * 60;                                   // 動かした量（分、丸める前）
@@ -508,14 +546,17 @@ function onBlkMove(e) {
   let tip = document.getElementById('drag-tip');
   if (!tip) { tip = document.createElement('div'); tip.id = 'drag-tip'; document.body.appendChild(tip); }
   tip.textContent = `${fmtMD(d.date)} ${fromMin(d.s)}–${fromMin(d.e)}`;
-  tip.style.left = (e.clientX + 12) + 'px'; tip.style.top = (e.clientY + 12) + 'px';
+  tip.style.left = Math.max(4, e.clientX - 40) + 'px'; tip.style.top = (e.pointerType === 'touch' ? Math.max(4, e.clientY - 64) : e.clientY + 12) + 'px';   // 指で隠れないよう、指の上に出す
 }
 function onBlkUp(e) {
   const d = _drag; if (!d) return;
   d.el.removeEventListener('pointermove', onBlkMove); d.el.removeEventListener('pointerup', onBlkUp); d.el.removeEventListener('pointercancel', onBlkUp);
   const tip = document.getElementById('drag-tip'); if (tip) tip.remove();
   _drag = null;
+  d.el.classList.remove('lifted');
+  if (d.lifted) { _justDragged = true; setTimeout(() => _justDragged = false, 400); }   // 持ち上げただけで離した場合も、編集画面を開かない
   if (!d.moved) return;
+  if (e.type === 'pointercancel') { renderAll(); return; }                                 // 途中で中断されたら、確定せず元に戻す
   _justDragged = true; setTimeout(() => _justDragged = false, 50);
   const startTime = fromMin(d.s), endTime = fromMin(d.e);
   if (d.b.recurrence) {
