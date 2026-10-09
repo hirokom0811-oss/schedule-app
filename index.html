@@ -71,7 +71,8 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 .blk .tm { color: var(--muted); font-size: 10px; }
 .blk .tk { font-size: 10px; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .blk .tk.done { text-decoration: line-through; color: var(--muted); }
-.blk.draft { border-style: dashed; opacity: .85; }
+.blk.draft { border-style: dashed; border-width: 2px;
+  background-image: repeating-linear-gradient(135deg, rgba(255,255,255,.7) 0, rgba(255,255,255,.7) 5px, transparent 5px, transparent 10px); }   /* 仮＝斜線の模様＋破線の枠（スマホでも見分けられるように） */
 /* 短い枠（15分など）：1行にして、隣の枠にはみ出さない */
 .blk.short { padding-top: 1px; padding-bottom: 0; }
 .blk.short .tm { display: none; }
@@ -150,7 +151,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
   /* 指で押せる大きさ（目安44px）に近づける：移動つまみと長さ変更の帯 */
   .blk .grip { width: 28px; height: 28px; font-size: 16px; line-height: 28px; }
   .blk .resize { height: 16px; }
-  .blk .tag { display: none; }   /* 狭い列では「仮」ラベルを隠す（破線の枠で見分ける） */
+  .grid-body.multi .blk .tag { display: none; }   /* 列が狭い週ビューでは「仮」ラベルを隠す（斜線で見分ける）。日ビューでは出す */
   .rv-btns button { width: 52px; height: 40px; }
   .btn-sm { padding: 6px 10px; }
 }
@@ -189,7 +190,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 
 <script>
 'use strict';
-const APP_VERSION = 'v0.3.0';
+const APP_VERSION = 'v0.3.2';
 const GIST_FILE = 'schedule_data.json';
 const DAY_START = 6, DAY_END = 23;       // 表示する時間帯
 // 拡大レベル：1時間の高さ(px)と、ドラッグの刻み(分)。拡大するほど細かく動かせる（Shift押下中は5分）
@@ -338,7 +339,7 @@ function updateTitle() {
   else if (S.view === 'week') { const s = weekStart(S.cur); t = `${fmtMD(s)} – ${fmtMD(addDays(s, 6))}`; }
   else t = `${S.cur.replace(/-/g, '/')}(${dowLabel(S.cur)})`;
   document.getElementById('cal-title').textContent = t;
-  document.getElementById('confirm-btn').classList.toggle('hidden', S.view === 'month');
+  document.getElementById('confirm-btn').classList.toggle('hidden', S.view !== 'week');   // 確定は週ビューだけ（日ビューで押すと、その日だけでなく週全体が対象になり紛らわしいため）
   document.querySelector('.zoom-ctl').classList.toggle('hidden', S.view === 'month');   // 月ビューには時間の目盛りがないので、拡大・縮小は隠す
   document.getElementById('review-btn').classList.toggle('hidden', S.view !== 'day');
 }
@@ -417,7 +418,7 @@ function renderGrid(con, days) {
   const cols = `${narrow ? 34 : 46}px repeat(${days.length}, minmax(0, 1fr))`;
   let html = `<div class="grid-body-wrap" id="gbw"><div class="grid-head" style="grid-template-columns:${cols}"><div></div>`;
   days.forEach(ds => html += `<div class="${ds === today() ? 'today' : ''}" onclick="jumpToDay('${ds}')">${narrow && days.length > 1 ? `${parseDate(ds).getDate()}<br>${dowLabel(ds)}` : fmtMD(ds)}</div>`);
-  html += `</div><div class="grid-body z${S.zoom}" id="gb" style="grid-template-columns:${cols};--hh:${HH}px">`;
+  html += `</div><div class="grid-body z${S.zoom}${days.length > 1 ? ' multi' : ''}" id="gb" style="grid-template-columns:${cols};--hh:${HH}px">`;
   html += '<div class="time-col">';
   for (let hr = DAY_START; hr < DAY_END; hr++) html += `<div>${narrow ? hr : pad(hr) + ':00'}</div>`;
   html += '</div>';
@@ -826,6 +827,9 @@ function openSettings() {
     <div class="sect"><h4>作業枠テンプレート</h4>
       ${S.blockTemplates.map(t => `<div class="task-row"><span class="ttl">${h(t.title)} ${t.startTime}–${t.endTime} ${h(t.theme)}</span><button class="btn btn-sm" onclick="delTemplate('${t.id}')">削除</button></div>`).join('') || '<div class="empty">まだありません</div>'}
       <div class="row" style="margin-top:6px"><input id="tp-title" placeholder="名前"><input type="time" id="tp-s" value="09:00"><input type="time" id="tp-e" value="10:00"><select id="tp-th">${['', ...S.themes].map(t => `<option>${h(t)}</option>`).join('')}</select><button class="btn btn-sm" onclick="addTemplate()">追加</button></div></div>
+    <div class="sect"><h4>お試し（サンプルデータ）</h4>
+      <div class="empty" style="margin-bottom:6px">架空の予定・タスク・候補を入れて、操作を試せます。<b>この端末のデータが置き換わります</b>（先に「JSON書き出し」でバックアップできます）。サンプルのまま「クラウドに保存」しようとすると、確認が出ます。</div>
+      <div class="row"><button class="btn btn-sm btn-primary" onclick="loadSample()">サンプルを入れる</button><button class="btn btn-sm btn-danger" onclick="clearAllData()">データを全部消す</button></div></div>
     <div class="sect"><h4>バックアップ</h4><div class="row"><button class="btn btn-sm" onclick="exportJson()">JSON書き出し</button><label class="btn btn-sm" style="width:auto;color:var(--text)">JSON読み込み<input type="file" accept=".json" hidden onchange="importJson(this.files[0])"></label></div></div>
     <div class="sect"><h4>最近の変更（確定済みの予定のみ記録）</h4>
       ${S.changes.slice(-8).reverse().map(c => `<div class="empty">${c.at.slice(5, 16).replace('T', ' ')} ${h(c.title || '')} ${c.kind}${c.before && c.after && c.before.startTime ? `：${c.before.date} ${c.before.startTime}→${c.after.date} ${c.after.startTime}` : ''}</div>`).join('') || '<div class="empty">まだありません</div>'}</div>`);
@@ -853,6 +857,48 @@ function importJson(file) {
   fr.onload = () => { try { applyData(JSON.parse(fr.result)); save(); closeModal(); renderAll(); showToast('読み込みました'); } catch (e) { showToast('読み込み失敗: ' + e.message); } };
   fr.readAsText(file);
 }
+// ───────── お試し用サンプル（架空の内容。実際の業務名は入れない） ─────────
+function loadSample() {
+  if (!confirm('この端末の予定・タスク・候補を、サンプルに置き換えます。よろしいですか？\n（クラウドには送られません）')) return;
+  const today0 = today(), nextMon = addDays(weekStart(today0), 7), thisMon = weekStart(today0);
+  const mk = (date, s, e, title, theme, status, extra) => ({ id: uuid(), title, theme, date, startTime: s, endTime: e, recurrence: null, recurrenceEnd: null, status, createdAt: new Date().toISOString(), ...(extra || {}) });
+  const blocks = [];
+  // 今週：確定済み（振り返りを試す用）。今日と今日までの平日
+  for (let i = 0; i < 5; i++) {
+    const ds = addDays(thisMon, i); if (ds > today0) break;
+    blocks.push(mk(ds, '09:00', '11:00', '作業時間', '導入', 'confirmed'), mk(ds, '11:00', '12:00', '作業時間', '活用', 'confirmed'), mk(ds, '14:00', '16:00', '作業時間', '導入', 'confirmed'));
+  }
+  // 来週：配置案（仮）。月〜金
+  for (let i = 0; i < 5; i++) {
+    const ds = addDays(nextMon, i);
+    blocks.push(mk(ds, '08:30', '09:00', '朝のルーティン', 'コミュ・雑務', 'draft'), mk(ds, '09:00', '11:00', '作業時間', '導入', 'draft'), mk(ds, '11:00', '12:00', '作業時間', '活用', 'draft'),
+      mk(ds, '13:00', '14:00', '昼MTG', 'コミュ・雑務', 'draft'), mk(ds, '14:00', '16:00', '作業時間', 'ひとづくり', 'draft'));
+    if (i === 1 || i === 3) blocks.push(mk(ds, '16:00', '17:00', '定例打合せ', 'コミュ・雑務', 'draft'));
+  }
+  const tk = (title, dueOff, priority, scale) => ({ id: uuid(), title, dueDate: dueOff === null ? null : addDays(today0, dueOff), priority, scale, completed: false, blockIds: [], createdAt: new Date().toISOString() });
+  const tasks = [tk('資料の下書き（サンプル）', -2, 'high', 'large'), tk('見積の確認（サンプル）', 3, 'high', 'medium'), tk('メールの返信まとめ（サンプル）', 1, 'medium', 'small'),
+    tk('手順書の見直し（サンプル）', 10, 'medium', 'large'), tk('機材の発注（サンプル）', 6, 'low', 'small'), tk('いつかやる整理（サンプル）', null, 'low', 'medium')];
+  // 今週の確定済み枠に、タスクを入れておく（振り返りで○×を試せる）
+  const firstDone = blocks.find(b => b.status === 'confirmed' && b.date === today0 && b.startTime === '09:00') || blocks.find(b => b.status === 'confirmed');   // 今日の朝の枠に入れる（今日の振り返りで、タスクごとの○×を試せる）
+  if (firstDone) { tasks[0].blockIds.push(firstDone.id); tasks[2].blockIds.push(firstDone.id); }
+  const monWork = blocks.find(b => b.status === 'draft' && b.date === nextMon && b.startTime === '09:00');
+  const tueWork = blocks.find(b => b.status === 'draft' && b.date === addDays(nextMon, 1) && b.startTime === '09:00');
+  const wedPm = blocks.find(b => b.status === 'draft' && b.date === addDays(nextMon, 2) && b.startTime === '14:00');
+  const pr = (kind, date, extra) => ({ id: uuid(), date, kind, status: 'pending', createdAt: new Date().toISOString(), ...extra });
+  const proposals = [
+    pr('link', nextMon, { taskId: tasks[1].id, blockId: monWork.id, reason: '期限まで3日。月曜の午前の枠が空いている（サンプルの理由）' }),
+    pr('link', addDays(nextMon, 1), { taskId: tasks[3].id, blockId: tueWork.id, reason: '大きいタスクなので、2時間の枠に単独で入れる（サンプルの理由）' }),
+    pr('move', addDays(nextMon, 2), { blockId: wedPm.id, toDate: addDays(nextMon, 2), toStart: '14:30', toEnd: '16:30', reason: '昼MTGのあとに余裕を持たせる（サンプルの理由）' }),
+  ];
+  applyData({ blocks, tasks, proposals, reviews: [], changes: [], blockTemplates: [{ id: uuid(), title: '作業時間', startTime: '09:00', endTime: '11:00', theme: '導入' }], themes: DEFAULT_THEMES.slice() });
+  lsSet('sched_sample', '1'); save(); S.cur = nextMon; S.view = 'week'; closeModal(); renderAll();
+  showToast('サンプルを入れました（来週に仮の予定があります）');
+}
+function clearAllData() {
+  if (!confirm('この端末の予定・タスク・候補・振り返りをすべて消します。よろしいですか？\n（クラウドのデータは消えません）')) return;
+  applyData({ blocks: [], tasks: [], proposals: [], reviews: [], changes: [], blockTemplates: [], themes: DEFAULT_THEMES.slice() });
+  lsSet('sched_sample', ''); save(); closeModal(); renderAll(); showToast('データを消しました');
+}
 function payload() { return { blocks: S.blocks, tasks: S.tasks, blockTemplates: S.blockTemplates, themes: S.themes, reviews: S.reviews, proposals: S.proposals, changes: S.changes, savedAt: new Date().toISOString() }; }
 function applyData(d) {
   if (!d || typeof d !== 'object' || !Array.isArray(d.blocks)) throw new Error('データ形式が不正です（blocksがありません）');
@@ -862,6 +908,7 @@ function applyData(d) {
 async function gistPush() {
   const token = lsGet('sched_gist_token'); let gid = lsGet('sched_gist_id');
   if (!token) { showToast('先にトークンを設定してください'); openSettings(); return; }
+  if (lsGet('sched_sample') === '1' && !confirm('今のデータはサンプルです。クラウド（Gist）のデータが、サンプルで上書きされます。本当に保存しますか？')) return;
   try {
     if (gid) {
       const meta = await fetch(`https://api.github.com/gists/${gid}`, { headers: { Authorization: `token ${token}` } });
@@ -887,7 +934,7 @@ async function gistPull() {
     const data = await res.json(); const f = data.files[GIST_FILE]; if (!f) throw new Error(GIST_FILE + ' が見つかりません');
     let raw = f.content;
     if (f.truncated) { const r = await fetch(f.raw_url); if (!r.ok) throw new Error('rawデータの取得に失敗'); raw = await r.text(); }
-    applyData(JSON.parse(raw)); save();
+    applyData(JSON.parse(raw)); lsSet('sched_sample', ''); save();
     lsSet('sched_last_saved', data.updated_at || new Date().toISOString()); _dirty = false; hideBanner(); closeModal(); renderAll(); showToast('☁ 読み込みました');
   } catch (e) { showToast('エラー: ' + e.message); }
 }
