@@ -29,6 +29,8 @@ header h1 { font-size: 16px; margin: 0 8px 0 0; }
 .btn-primary { background: var(--primary); color: #fff; border-color: var(--primary); }
 .btn-primary:hover { background: #1d4ed8; }
 .btn-danger { color: var(--danger); border-color: var(--danger); }
+.btn:disabled { opacity: .35; cursor: not-allowed; background: var(--bg); }   /* 押せないボタンは薄くして示す */
+.btn:disabled:hover { background: var(--bg); }
 .btn-sm { padding: 2px 8px; font-size: 12px; }
 .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
 .seg button { border: 0; border-right: 1px solid var(--border); background: var(--surface); padding: 5px 12px; }
@@ -70,6 +72,13 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 .blk .tk { font-size: 10px; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .blk .tk.done { text-decoration: line-through; color: var(--muted); }
 .blk.draft { border-style: dashed; opacity: .85; }
+/* 短い枠（15分など）：1行にして、隣の枠にはみ出さない */
+.blk.short { padding-top: 1px; padding-bottom: 0; }
+.blk.short .tm { display: none; }
+.blk.tiny { padding: 0 3px; line-height: 1; display: flex; align-items: center; }
+.blk.tiny .t { font-size: 10px; }
+.blk.tiny .tm, .blk.tiny .tag, .blk.tiny .grip { display: none; }
+.blk.tiny .resize { height: 3px; }
 .blk .tag { position: absolute; top: 1px; right: 14px; font-size: 9px; background: #fff; border: 1px solid var(--warn); color: var(--warn); border-radius: 3px; padding: 0 3px; }
 .blk .grip { position: absolute; top: 0; right: 0; width: 14px; height: 14px; font-size: 10px; text-align: center; cursor: grab; touch-action: none; color: var(--muted); }
 .blk .resize { position: absolute; left: 0; right: 0; bottom: 0; height: 6px; cursor: ns-resize; touch-action: none; }
@@ -158,7 +167,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
     <button data-view="week" onclick="setView('week')">週</button>
     <button data-view="month" onclick="setView('month')">月</button>
   </div>
-  <span class="zoom-ctl"><button class="btn" onclick="zoomBy(-1)" title="縮小">－</button><span class="lbl" id="zoom-lbl"></span><button class="btn" onclick="zoomBy(1)" title="拡大">＋</button></span>
+  <span class="zoom-ctl"><button class="btn" id="zoom-out" onclick="zoomBy(-1)" title="縮小">－</button><span class="lbl" id="zoom-lbl"></span><button class="btn" id="zoom-in" onclick="zoomBy(1)" title="拡大">＋</button></span>
   <span class="spacer"></span>
   <button class="btn" id="confirm-btn" onclick="confirmWeek()">この週を確定</button>
   <button class="btn" id="review-btn" onclick="openReview()">📝 振り返り</button>
@@ -178,7 +187,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 
 <script>
 'use strict';
-const APP_VERSION = 'v0.2.1';
+const APP_VERSION = 'v0.2.2';
 const GIST_FILE = 'schedule_data.json';
 const DAY_START = 6, DAY_END = 23;       // 表示する時間帯
 // 拡大レベル：1時間の高さ(px)と、ドラッグの刻み(分)。拡大するほど細かく動かせる（Shift押下中は5分）
@@ -187,6 +196,7 @@ const ZOOMS = [
   { hh: 96,  snap: 15, label: '拡大' },
   { hh: 168, snap: 15, label: '最大' },
 ];
+const MIN_H = 6;                          // 枠の最低の高さ(px)
 let HH = ZOOMS[0].hh;                     // 現在の1時間あたりのpx
 const snapMin = (e) => (e && e.shiftKey) ? 5 : ZOOMS[S.zoom].snap;
 const DN = ['日','月','火','水','木','金','土'];
@@ -345,7 +355,13 @@ function zoomBy(dir) {
   renderAll();
   const w2 = document.getElementById('gbw'); if (w2 && topHour !== null) w2.scrollTop = topHour * HH;
 }
-function updateZoomLabel() { const z = ZOOMS[S.zoom]; const el = document.getElementById('zoom-lbl'); if (el) el.textContent = `${z.label}・${z.snap}分刻み`; }
+function updateZoomLabel() {
+  const z = ZOOMS[S.zoom]; const el = document.getElementById('zoom-lbl'); if (el) el.textContent = `${z.label}・${z.snap}分刻み`;
+  // これ以上縮小／拡大できないときは、ボタンを薄くして押せないことを示す
+  const out = document.getElementById('zoom-out'), inn = document.getElementById('zoom-in');
+  if (out) { out.disabled = S.zoom <= 0; out.title = out.disabled ? 'これ以上縮小できません' : '縮小'; }
+  if (inn) { inn.disabled = S.zoom >= ZOOMS.length - 1; inn.title = inn.disabled ? 'これ以上拡大できません' : '拡大'; }
+}
 function calPrev() { navigate(-1); }
 function calNext() { navigate(1); }
 function navigate(dir) {
@@ -408,14 +424,15 @@ function renderGrid(con, days) {
     html += `<div class="col ${ds === today() ? 'today-col' : ''}" data-date="${ds}" style="height:${total}px">`;
     layoutLanes(blocksOn(ds)).forEach(({ b, s, e, lane, lanes }) => {
       const top = (s - DAY_START*60) / 60 * HH;
-      const height = Math.max(18, (e - s) / 60 * HH - 1);
+      const height = Math.max(MIN_H, (e - s) / 60 * HH - 1);   // 実際の長さのまま描く（最低高さで膨らませると次の枠と重なる）
       const w = 100 / lanes;
       const st = blockStats(b); const ts = blockTasks(b.id);
-      html += `<div class="blk ${themeClass(b.theme)} ${isDraft(b) ? 'draft' : ''}" data-id="${b.id}" data-date="${ds}"
+      const sizeCls = height < 20 ? 'tiny' : height < 34 ? 'short' : '';
+      html += `<div class="blk ${themeClass(b.theme)} ${isDraft(b) ? 'draft' : ''} ${sizeCls}" data-id="${b.id}" data-date="${ds}"
         style="top:${top}px;height:${height}px;left:calc(${lane*w}% + 1px);width:calc(${w}% - 3px)">
         ${isDraft(b) ? '<span class="tag">仮</span>' : ''}<span class="grip" title="ドラッグで移動">⠿</span>
         <div class="t">${h(b.title || '作業枠')}</div><div class="tm">${b.startTime}–${b.endTime}${st.total ? ` ・${st.done}/${st.total}` : ''}</div>
-        ${days.length === 1 || height > 56 ? ts.slice(0, 5).map(t => `<div class="tk ${t.completed ? 'done' : ''}">${h(t.title)}</div>`).join('') : ''}
+        ${(days.length === 1 || height > 56) && height >= 40 ? ts.slice(0, 5).map(t => `<div class="tk ${t.completed ? 'done' : ''}">${h(t.title)}</div>`).join('') : ''}
         <div class="resize"></div></div>`;
     });
     if (ds === today()) {
@@ -482,7 +499,7 @@ function onBlkMove(e) {
     d.e = Math.max(d.s0 + sn, Math.min(DAY_END*60, d.e0 + dm)); d.s = d.s0;
   }
   d.el.style.transform = `translate(${d.mode === 'move' ? dx : 0}px, ${(d.mode === 'move' ? (d.s - d.s0) / 60 * HH : 0)}px)`;
-  if (d.mode === 'resize') d.el.style.height = Math.max(18, (d.e - d.s) / 60 * HH - 1) + 'px';
+  if (d.mode === 'resize') d.el.style.height = Math.max(MIN_H, (d.e - d.s) / 60 * HH - 1) + 'px';
   let tip = document.getElementById('drag-tip');
   if (!tip) { tip = document.createElement('div'); tip.id = 'drag-tip'; document.body.appendChild(tip); }
   tip.textContent = `${fmtMD(d.date)} ${fromMin(d.s)}–${fromMin(d.e)}`;
