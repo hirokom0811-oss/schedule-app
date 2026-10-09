@@ -53,7 +53,15 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 .grid-body-wrap { max-height: calc(100vh - 150px); overflow-y: auto; }
 .grid-body { display: grid; position: relative; }
 .time-col div { height: var(--hh); border-bottom: 1px solid var(--border); font-size: 10px; color: var(--muted); padding: 2px 4px; background: var(--bg); }
-.col { position: relative; border-left: 1px solid var(--border); background: repeating-linear-gradient(to bottom, transparent 0, transparent calc(var(--hh) - 1px), var(--border) calc(var(--hh) - 1px), var(--border) var(--hh)); }
+.col { position: relative; border-left: 1px solid var(--border);
+  background-image:
+    linear-gradient(to bottom, transparent calc(100% - 1px), var(--border) 100%),
+    linear-gradient(to bottom, transparent calc(100% - 1px), #edf0f3 100%),
+    linear-gradient(to bottom, transparent calc(100% - 1px), #f4f6f8 100%);
+  background-size: 100% var(--hh), 100% calc(var(--hh) / 2), 100% calc(var(--hh) / 4); }
+.grid-body.z0 .col { background-size: 100% var(--hh), 100% calc(var(--hh) / 2), 0 0; }  /* 標準：1時間と30分の線 */
+.zoom-ctl { display: inline-flex; align-items: center; gap: 4px; }
+.zoom-ctl .lbl { font-size: 11px; color: var(--muted); min-width: 64px; text-align: center; }
 .col.today-col { background-color: #f8fbff; }
 .blk { position: absolute; border-radius: 5px; border: 1px solid; padding: 2px 4px; font-size: 11px; overflow: hidden; cursor: pointer; user-select: none; line-height: 1.3; }
 .blk .t { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -149,6 +157,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
     <button data-view="week" onclick="setView('week')">週</button>
     <button data-view="month" onclick="setView('month')">月</button>
   </div>
+  <span class="zoom-ctl"><button class="btn" onclick="zoomBy(-1)" title="縮小">－</button><span class="lbl" id="zoom-lbl"></span><button class="btn" onclick="zoomBy(1)" title="拡大">＋</button></span>
   <span class="spacer"></span>
   <button class="btn" id="confirm-btn" onclick="confirmWeek()">この週を確定</button>
   <button class="btn" id="review-btn" onclick="openReview()">📝 振り返り</button>
@@ -168,11 +177,17 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 
 <script>
 'use strict';
-const APP_VERSION = 'v0.1.2';
+const APP_VERSION = 'v0.2.0';
 const GIST_FILE = 'schedule_data.json';
 const DAY_START = 6, DAY_END = 23;       // 表示する時間帯
-const HH = 48;                            // 1時間あたりのpx
-const SNAP = 15;                          // 分
+// 拡大レベル：1時間の高さ(px)と、ドラッグの刻み(分)。拡大するほど細かく動かせる（Shift押下中は5分）
+const ZOOMS = [
+  { hh: 48,  snap: 30, label: '標準' },
+  { hh: 96,  snap: 15, label: '拡大' },
+  { hh: 168, snap: 15, label: '最大' },
+];
+let HH = ZOOMS[0].hh;                     // 現在の1時間あたりのpx
+const snapMin = (e) => (e && e.shiftKey) ? 5 : ZOOMS[S.zoom].snap;
 const DN = ['日','月','火','水','木','金','土'];
 const SCALE_MIN = { small: 15, medium: 45, large: 90, super: 120 };
 const SCALE_LABEL = { small: '小', medium: '中', large: '大', super: '特大' };
@@ -207,6 +222,7 @@ const S = {
   changes: [],       // {id,at,blockId,kind,before,after}
   view: 'week',
   cur: today(),
+  zoom: 0,           // ZOOMS のインデックス
 };
 const KEYS = { blocks:'sched_blocks', tasks:'sched_tasks', blockTemplates:'sched_templates', themes:'sched_themes', reviews:'sched_reviews', proposals:'sched_proposals', changes:'sched_changes' };
 function lsGet(k) { try { return localStorage.getItem(k); } catch (_) { return null; } }
@@ -301,7 +317,7 @@ function unlinkTask(taskId, blockId) {
 function renderAll() {
   document.getElementById('ver').textContent = APP_VERSION;
   document.querySelectorAll('#view-seg button').forEach(b => b.classList.toggle('active', b.dataset.view === S.view));
-  renderCalendar(); renderSide(); updateTitle();
+  renderCalendar(); renderSide(); updateTitle(); updateZoomLabel();
 }
 function updateTitle() {
   let t = '';
@@ -318,6 +334,16 @@ function renderCalendar() {
   else renderGrid(con, S.view === 'week' ? Array.from({length: 7}, (_, i) => addDays(weekStart(S.cur), i)) : [S.cur]);
 }
 function setView(v) { S.view = v; renderAll(); }
+function zoomBy(dir) {
+  const next = Math.max(0, Math.min(ZOOMS.length - 1, S.zoom + dir));
+  if (next === S.zoom) return;
+  const wrap = document.getElementById('gbw');
+  const topHour = wrap ? wrap.scrollTop / HH : null;      // 今見ている時刻を保つ
+  S.zoom = next; HH = ZOOMS[next].hh; lsSet('sched_zoom', String(next));
+  renderAll();
+  const w2 = document.getElementById('gbw'); if (w2 && topHour !== null) w2.scrollTop = topHour * HH;
+}
+function updateZoomLabel() { const z = ZOOMS[S.zoom]; const el = document.getElementById('zoom-lbl'); if (el) el.textContent = `${z.label}・${z.snap}分刻み`; }
 function calPrev() { navigate(-1); }
 function calNext() { navigate(1); }
 function navigate(dir) {
@@ -371,7 +397,7 @@ function renderGrid(con, days) {
   const cols = `${narrow ? 34 : 46}px repeat(${days.length}, minmax(0, 1fr))`;
   let html = `<div class="grid-body-wrap" id="gbw"><div class="grid-head" style="grid-template-columns:${cols}"><div></div>`;
   days.forEach(ds => html += `<div class="${ds === today() ? 'today' : ''}" onclick="jumpToDay('${ds}')">${narrow && days.length > 1 ? `${parseDate(ds).getDate()}<br>${dowLabel(ds)}` : fmtMD(ds)}</div>`);
-  html += `</div><div class="grid-body" id="gb" style="grid-template-columns:${cols};--hh:${HH}px">`;
+  html += `</div><div class="grid-body z${S.zoom}" id="gb" style="grid-template-columns:${cols};--hh:${HH}px">`;
   html += '<div class="time-col">';
   for (let hr = DAY_START; hr < DAY_END; hr++) html += `<div>${narrow ? hr : pad(hr) + ':00'}</div>`;
   html += '</div>';
@@ -412,8 +438,9 @@ function bindGrid() {
     col.addEventListener('click', e => {
       if (e.target !== col) return;
       const y = e.clientY - col.getBoundingClientRect().top;
-      const m = DAY_START*60 + Math.floor(y / HH * 60 / SNAP) * SNAP;
-      openBlock(null, col.dataset.date, fromMin(Math.min(m, 23*60)), fromMin(Math.min(m + 60, 24*60 - SNAP)));
+      const sn = snapMin(e);
+      const m = DAY_START*60 + Math.floor(y / HH * 60 / sn) * sn;
+      openBlock(null, col.dataset.date, fromMin(Math.min(m, 23*60)), fromMin(Math.min(m + 60, 24*60 - sn)));
     });
   });
   document.querySelectorAll('.blk').forEach(el => {
@@ -438,7 +465,8 @@ function onBlkMove(e) {
   const dx = e.clientX - d.x0, dy = e.clientY - d.y0;
   if (!d.moved && Math.hypot(dx, dy) < 5) return;
   d.moved = true; d.el.classList.add('dragging');
-  const dm = Math.round(dy / HH * 60 / SNAP) * SNAP;
+  const sn = snapMin(e);
+  const dm = Math.round(dy / HH * 60 / sn) * sn;
   const dur = d.e0 - d.s0;
   if (d.mode === 'move') {
     d.s = Math.max(DAY_START*60, Math.min(DAY_END*60 - dur, d.s0 + dm)); d.e = d.s + dur;
@@ -449,7 +477,7 @@ function onBlkMove(e) {
       if (under) d.date = under.dataset.date;
     }
   } else {
-    d.e = Math.max(d.s0 + SNAP, Math.min(DAY_END*60, d.e0 + dm)); d.s = d.s0;
+    d.e = Math.max(d.s0 + sn, Math.min(DAY_END*60, d.e0 + dm)); d.s = d.s0;
   }
   d.el.style.transform = `translate(${d.mode === 'move' ? dx : 0}px, ${(d.mode === 'move' ? (d.s - d.s0) / 60 * HH : 0)}px)`;
   if (d.mode === 'resize') d.el.style.height = Math.max(18, (d.e - d.s) / 60 * HH - 1) + 'px';
@@ -791,6 +819,7 @@ window.addEventListener('beforeunload', e => { if (_dirty && lsGet('sched_gist_t
 
 // ───────── init ─────────
 if (window.innerWidth <= 600) S.view = 'day';   // スマホ幅は日ビューから始める（週は列が狭くなるため）
+{ const z = parseInt(lsGet('sched_zoom'), 10); S.zoom = (z >= 0 && z < ZOOMS.length) ? z : (window.innerWidth <= 600 ? 1 : 0); HH = ZOOMS[S.zoom].hh; }
 loadAll(); renderAll();
 </script>
 </body>
