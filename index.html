@@ -106,6 +106,10 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 .cand { padding: 6px 0; border-bottom: 1px solid var(--bg); }
 .cand-main { display: flex; align-items: center; gap: 6px; }
 .cand-main .ttl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; font-size: 13px; }
+.cand.placed { background: #f6fbf7; border-radius: 6px; padding-left: 4px; padding-right: 4px; }
+.cand-when { margin: 3px 0 0 26px; display: flex; flex-wrap: wrap; gap: 4px; align-items: center; font-size: 11px; }
+.done-tag { background: #dcfce7; color: #166534; border-radius: 4px; padding: 0 5px; font-weight: 700; }
+.cand-when .when { background: #fff; border: 1px solid #bbf7d0; border-radius: 4px; padding: 0 5px; color: var(--text); text-decoration: none; }
 .cand-sub { font-size: 11px; color: var(--muted); margin: 2px 0 0 26px; }
 .cand-sub.over { color: var(--danger); }
 .intent { flex: none; font-size: 12px; font-weight: 700; border-radius: 4px; padding: 0 5px; }
@@ -141,9 +145,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 #toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); background: #111827; color: #fff; padding: 8px 14px; border-radius: 8px; z-index: 200; display: none; font-size: 13px; }
 
 @media (max-width: 900px) {
-  main { flex-direction: column; align-items: stretch; padding: 8px; gap: 8px; }
-  #cal-wrap, #side { width: 100%; }
-  #side { flex-shrink: 1; }
+  #side { width: 260px; }                        /* 狭いPCの窓でも、候補の欄は右側に残す（少し細くする） */
   .grid-body-wrap { max-height: 70vh; }
   header { position: static; padding: 6px 8px; gap: 6px; }
   header h1 { font-size: 14px; margin-right: 4px; }
@@ -163,6 +165,11 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
   .grid-body.multi .blk .tag { display: none; }   /* 列が狭い週ビューでは「仮」ラベルを隠す（斜線で見分ける）。日ビューでは出す */
   .rv-btns button { width: 52px; height: 40px; }
   .btn-sm { padding: 6px 10px; }
+}
+@media (max-width: 640px) {
+  main { flex-direction: column; align-items: stretch; padding: 8px; gap: 8px; }
+  #cal-wrap, #side { width: 100%; }
+  #side { flex-shrink: 1; }
 }
 </style>
 </head>
@@ -198,7 +205,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 
 <script>
 'use strict';
-const APP_VERSION = 'v0.4.2';
+const APP_VERSION = 'v0.4.4';
 const GIST_FILE = 'schedule_data.json';
 const DAY_START = 6, DAY_END = 23;       // 表示する時間帯
 // 拡大レベル：1時間の高さ(px)と、ドラッグの刻み(分)。拡大するほど細かく動かせる（Shift押下中は5分）
@@ -591,8 +598,15 @@ function rangeDays() {
 // 候補＝まだどの枠にも入っていない未完了のタスクを、優先順に並べたもの。
 // 順位は、Claude（planner）が書く `rank`（1が最優先）。`rank` が無いタスクは、その後ろに、期限・優先度の点数順で並ぶ。
 // どの枠に入れるかは、使う人が選ぶ（「配置」→ 枠を選ぶ）。
+// 候補の欄に並べるタスク：
+//  ・まだどの枠にも入っていない未完了のタスク（未配置）
+//  ・枠に入っていて、その枠が今日以降にあるタスク（配置済み。配置した日時を、行に出す）
+// 枠がすべて過去のタスクは、並べない（完了の記録が無いものが、大量に出てしまうため）。
+const taskBlocksOf = t => (t.blockIds || []).map(id => blockById(id)).filter(Boolean);
+const upcomingBlocksOf = t => taskBlocksOf(t).filter(b => b.date >= today() || b.recurrence).sort((a, b) => (a.date + a.startTime).localeCompare(b.date + b.startTime));
+const isPlaced = t => taskBlocksOf(t).length > 0;
 function rankedOpenTasks() {
-  const open = S.tasks.filter(t => !t.completed && !(t.blockIds || []).some(id => blockById(id)));
+  const open = S.tasks.filter(t => !t.completed && (!isPlaced(t) || upcomingBlocksOf(t).length > 0));
   const rk = t => (typeof t.rank === 'number') ? t.rank : null;
   return open.sort((a, b) => {
     const ra = rk(a), rb = rk(b);
@@ -602,22 +616,35 @@ function rankedOpenTasks() {
     return taskScore(b).score - taskScore(a).score;
   });
 }
+const unplacedCount = list => list.filter(t => !isPlaced(t)).length;
 function candidateRowsHtml(list, limit) {
   const shown = limit ? list.slice(0, limit) : list;
   return shown.map((t, i) => {
+    const placed = isPlaced(t);
     const sub = [t.estimateH ? `見積 ${fmtH(t.estimateH)}` : (t.scale ? `見積 ${SCALE_LABEL[t.scale]}` : ''), t.split ? `分割${t.split}` : '', dueLabel(t)].filter(Boolean);
-    return `<div class="cand"><div class="cand-main"><span class="rankno">${i + 1}</span>${t.intent ? `<span class="intent i${t.intent === '◎' ? '1' : '2'}">${h(t.intent)}</span>` : ''}
+    // 配置した日時（今日以降の枠）。押すと、その日の枠を開く
+    const when = placed ? upcomingBlocksOf(t).map(b => `<a class="when" href="#" onclick="gotoBlock('${b.id}');return false">${b.recurrence ? '毎週 ' : fmtMD(b.date) + ' '}${b.startTime}–${b.endTime}</a>`).join('') : '';
+    return `<div class="cand ${placed ? 'placed' : ''}"><div class="cand-main"><span class="rankno">${i + 1}</span>${t.intent ? `<span class="intent i${t.intent === '◎' ? '1' : '2'}">${h(t.intent)}</span>` : ''}
       <span class="ttl" title="${h(t.title)}" onclick="openTaskEdit('${t.id}')">${h(t.title)}</span>
-      <button class="btn btn-sm btn-primary" onclick="openPlace('${t.id}')">配置</button></div>
+      <button class="btn btn-sm ${placed ? '' : 'btn-primary'}" onclick="openPlace('${t.id}')">${placed ? '追加' : '配置'}</button></div>
+      ${placed ? `<div class="cand-when"><span class="done-tag">配置済み</span>${when}</div>` : ''}
       <div class="cand-sub ${dueOver(t) ? 'over' : ''}">${h(sub.join('　'))} <a href="#" onclick="openTaskEdit('${t.id}');return false">編集</a></div></div>`;
   }).join('') + (limit && list.length > limit ? `<div class="empty">他${list.length - limit}件（上の「候補」ボタンで、すべて見られます）</div>` : '');
 }
+function countLabel(list) { const u = unplacedCount(list), pl = list.length - u; return `未配置${u}件` + (pl ? `・配置済み${pl}件` : ''); }
+function gotoBlock(id) {
+  const b = blockById(id); if (!b) return;
+  closeModal();
+  if (!b.recurrence) S.cur = b.date;
+  renderAll(); openBlock(id, b.date);
+}
 function renderSide() {
   const open = rankedOpenTasks();
-  document.getElementById('task-count').textContent = `${open.length}件`;
-  document.getElementById('tasks').innerHTML = open.length ? candidateRowsHtml(open, 30) : '<div class="empty">候補はありません（すべての枠に入っています）</div>';
+  document.getElementById('task-count').textContent = countLabel(open);
+  document.getElementById('tasks').innerHTML = open.length ? candidateRowsHtml(open, 30) : '<div class="empty">候補はありません</div>';
   const badge2 = document.getElementById('prop-badge2');
-  if (badge2) { badge2.textContent = open.length; badge2.classList.toggle('hidden', !open.length); }
+  const un = unplacedCount(open);
+  if (badge2) { badge2.textContent = un; badge2.classList.toggle('hidden', !un); }   // 件数は、未配置だけ
 }
 function dueOver(t) { return t.dueDate && t.dueDate < today(); }
 function dueLabel(t) { if (!t.dueDate) return ''; const d = Math.round((parseDate(t.dueDate) - parseDate(today())) / 86400000); return d < 0 ? `超過${-d}日` : d === 0 ? '今日' : `あと${d}日`; }
@@ -627,9 +654,9 @@ let _candCtx = false;
 function openCandidates() {
   _candCtx = true;
   const open = rankedOpenTasks();
-  openModal(`<h3>候補（優先順）${open.length ? ` ${open.length}件` : ''}<span><button class="btn btn-sm" onclick="openTaskEdit(null)">＋追加</button> <button class="btn btn-sm" onclick="closeModal()">✕</button></span></h3>
-    <div class="empty" style="margin-bottom:6px">上ほど優先です。「配置」を押して、入れる枠を選びます。</div>
-    ${open.length ? candidateRowsHtml(open, 0) : '<div class="empty">候補はありません（すべての枠に入っています）</div>'}`);
+  openModal(`<h3>候補（優先順）${open.length ? ` ${countLabel(open)}` : ''}<span><button class="btn btn-sm" onclick="openTaskEdit(null)">＋追加</button> <button class="btn btn-sm" onclick="closeModal()">✕</button></span></h3>
+    <div class="empty" style="margin-bottom:6px">上ほど優先です。「配置」を押して、入れる枠を選びます。配置済みのタスクは、日時が出ます（押すと、その枠を開く。「追加」で、別の枠にも入れられる）。</div>
+    ${open.length ? candidateRowsHtml(open, 0) : '<div class="empty">候補はありません</div>'}`);
 }
 
 // ───────── rule-based suggestion (イ) ─────────
