@@ -205,7 +205,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 
 <script>
 'use strict';
-const APP_VERSION = 'v0.4.4';
+const APP_VERSION = 'v0.4.5';
 const GIST_FILE = 'schedule_data.json';
 const DAY_START = 6, DAY_END = 23;       // 表示する時間帯
 // 拡大レベル：1時間の高さ(px)と、ドラッグの刻み(分)。拡大するほど細かく動かせる（Shift押下中は5分）
@@ -787,16 +787,26 @@ function deleteTaskFromEdit() {
 }
 
 // ───────── place task modal ─────────
-function openPlace(taskId) {
+// 配置の画面：入れる枠を、週ごとに選ぶ。最初は、いま見ている週（日ビューは、その日を含む週。月ビューは、今日の週）。
+// 「◀ 前の週」「次の週 ▶」で、ほかの週の枠にも切り替えられる（来週の枠に入れるため）。今日より前の日の枠は、並べない。
+function openPlace(taskId, ws) {
   const t = taskById(taskId); if (!t) return;
   const need = taskMin(t);
-  const days = rangeDays();
-  const rows = [];
-  days.forEach(ds => blocksOn(ds).forEach(b => rows.push({ ds, b, free: Math.max(blockStats(b).free, 0) })));
-  const row = ({ ds, b, free }) => `<div class="task-row" style="${free < need ? 'opacity:.55' : ''}"><span class="ttl">${fmtMD(ds)} ${b.startTime}–${b.endTime} ${h(b.title || '作業枠')}${isDraft(b) ? '（仮）' : ''}</span><span class="meta ${free < need ? 'over' : ''}">残${free}分</span><button class="btn btn-sm btn-primary" onclick="placeTask('${t.id}','${b.id}')">入れる</button></div>`;
+  const auto = !ws;                         // 週を指定せず開いたとき：枠がある、最初の週まで進める（今日が土曜で、今週の枠が残っていない場合など）
+  ws = ws || (S.view === 'month' ? weekStart(today()) : weekStart(S.cur));
+  const weekRows = w => {
+    const r = [];
+    Array.from({ length: 7 }, (_, i) => addDays(w, i)).filter(ds => ds >= today()).forEach(ds => blocksOn(ds).forEach(b => r.push({ ds, b, free: Math.max(blockStats(b).free, 0) })));
+    return r;
+  };
+  let rows = weekRows(ws);
+  for (let k = 0; auto && !rows.length && k < 8; k++) { ws = addDays(ws, 7); rows = weekRows(ws); }
+  // 残りが足りない枠は、文字だけを薄くする。「入れる」ボタンは、いつも濃いまま（薄いと、押せないように見えるため）
+  const row = ({ ds, b, free }) => `<div class="task-row"><span class="ttl" style="${free < need ? 'opacity:.6' : ''}">${fmtMD(ds)} ${b.startTime}–${b.endTime} ${h(b.title || '作業枠')}${isDraft(b) ? '（仮）' : ''}</span><span class="meta ${free < need ? 'over' : ''}">残${free}分${free < need ? '（足りない）' : ''}</span><button class="btn btn-sm btn-primary" onclick="placeTask('${t.id}','${b.id}')">入れる</button></div>`;
   openModal(`<h3>「${h(t.title)}」を、どの枠に入れますか？<button class="btn btn-sm" onclick="closeModal()">✕</button></h3>
-    <div class="empty" style="margin-bottom:6px">${S.view === 'day' ? '表示中の日' : S.view === 'week' ? '表示中の週' : '表示中の月'}の枠から選びます（目安 ${need}分。残りが足りない枠は薄く表示）${_candCtx ? ' <a href="#" onclick="openCandidates();return false">← 候補へ戻る</a>' : ''}</div>
-    ${rows.map(row).join('') || '<div class="empty">この期間に枠がありません</div>'}`);
+    <div class="row" style="justify-content:space-between;margin-bottom:6px"><button class="btn btn-sm" onclick="openPlace('${t.id}','${addDays(ws, -7)}')">◀ 前の週</button><b>${fmtMD(ws)}〜${fmtMD(addDays(ws, 6))}</b><button class="btn btn-sm" onclick="openPlace('${t.id}','${addDays(ws, 7)}')">次の週 ▶</button></div>
+    <div class="empty" style="margin-bottom:6px">必要な時間の目安：${need}分。残りが足りない枠も、入れられます（文字が薄く、「足りない」と出ます。ボタンは、そのまま押せます）。${_candCtx ? ' <a href="#" onclick="openCandidates();return false">← 候補へ戻る</a>' : ''}</div>
+    ${rows.map(row).join('') || '<div class="empty">この週に、選べる枠がありません（今日より前の日は出しません）。「次の週 ▶」で、ほかの週を見られます</div>'}`);
 }
 function placeTask(taskId, blockId) {
   const back = _candCtx;
