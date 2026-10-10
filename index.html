@@ -110,6 +110,8 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 .cand { padding: 6px 0; border-bottom: 1px solid var(--bg); }
 .cand-main { display: flex; align-items: center; gap: 6px; }
 .cand-main .ttl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; font-size: 13px; }
+.confirmed-note { background: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 6px; padding: 6px 8px; font-size: 12px; margin-bottom: 6px; line-height: 1.6; }
+.undated-h { font-size: 12px; font-weight: 700; color: var(--muted); margin: 10px 0 2px; border-top: 1px dashed var(--border); padding-top: 6px; }
 .cand.placed { background: #f6fbf7; border-radius: 6px; padding-left: 4px; padding-right: 4px; }
 .cand-when { margin: 3px 0 0 26px; display: flex; flex-wrap: wrap; gap: 4px; align-items: center; font-size: 11px; }
 .rest-tag { background: #fef3c7; color: #92400e; border-radius: 4px; padding: 0 5px; font-weight: 700; }
@@ -211,7 +213,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 
 <script>
 'use strict';
-const APP_VERSION = 'v0.5.1';
+const APP_VERSION = 'v0.6.0';
 const GIST_FILE = 'schedule_data.json';
 const DAY_START = 6, DAY_END = 23;       // 表示する時間帯
 // 拡大レベル：1時間の高さ(px)と、ドラッグの刻み(分)。拡大するほど細かく動かせる（Shift押下中は5分）
@@ -274,11 +276,12 @@ const S = {
   reviews: [],       // {id,date,items:[{blockId,taskId,title,result:'good'|'partial'|'bad'|null,comment}],memo,createdAt}
   proposals: [],     // {id,date,kind:'link'|'move',taskId,blockId,toDate,toStart,toEnd,reason,status:'pending'|'approved'|'dismissed',createdAt}
   changes: [],       // {id,at,blockId,kind,before,after}
+  confirmedWeeks: [], // 確定した週の月曜の日付（その週の候補を、候補の欄から隠す）
   view: 'week',
   cur: today(),
   zoom: 0,           // ZOOMS のインデックス
 };
-const KEYS = { blocks:'sched_blocks', tasks:'sched_tasks', blockTemplates:'sched_templates', themes:'sched_themes', reviews:'sched_reviews', proposals:'sched_proposals', changes:'sched_changes' };
+const KEYS = { blocks:'sched_blocks', tasks:'sched_tasks', blockTemplates:'sched_templates', themes:'sched_themes', reviews:'sched_reviews', proposals:'sched_proposals', changes:'sched_changes', confirmedWeeks:'sched_confirmed_weeks' };
 function lsGet(k) { try { return localStorage.getItem(k); } catch (_) { return null; } }
 function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (_) {} }
 function loadAll() {
@@ -290,7 +293,7 @@ function loadAll() {
 }
 function normalizeData() {
   if (!Array.isArray(S.themes)) S.themes = (S.themes && S.themes.work) ? S.themes.work.slice() : DEFAULT_THEMES.slice();
-  for (const k of ['blocks','tasks','blockTemplates','reviews','proposals','changes']) if (!Array.isArray(S[k])) S[k] = [];
+  for (const k of ['blocks','tasks','blockTemplates','reviews','proposals','changes','confirmedWeeks']) if (!Array.isArray(S[k])) S[k] = [];
   S.tasks.forEach(t => { if (!Array.isArray(t.blockIds)) t.blockIds = t.blockId ? [t.blockId] : []; });
 }
 let _dirty = false;
@@ -668,10 +671,17 @@ function rangeDays() {
 const taskBlocksOf = t => (t.blockIds || []).map(id => blockById(id)).filter(Boolean);
 const upcomingBlocksOf = t => taskBlocksOf(t).filter(b => b.date >= today() || b.recurrence).sort((a, b) => (a.date + a.startTime).localeCompare(b.date + b.startTime));
 const isPlaced = t => taskBlocksOf(t).length > 0;
-function rankedOpenTasks() {
-  const open = S.tasks.filter(t => !t.completed && (taskRemaining(t) > 0 || upcomingBlocksOf(t).length > 0));
+// 候補＝見ている週（viewWeek）の対象のタスク（task.week＝その週の月曜の日付）。
+//  ・まだ入れていない分があるタスク（未配置）／枠に入っていて、その枠が今日以降にあるタスク（配置済み）
+// week が無いタスクは、「週の指定なし」の節に、別に並べる（消さない）。
+const viewWeek = () => weekStart(S.cur);
+const isWeekConfirmed = ws => S.confirmedWeeks.includes(ws);
+const _showWeeks = new Set();                                   // 確定した週の候補を、いまだけ表示している週
+const weekHidden = ws => isWeekConfirmed(ws) && !_showWeeks.has(ws);
+const isOpenCandidate = t => !t.completed && (taskRemaining(t) > 0 || upcomingBlocksOf(t).length > 0);
+function sortRanked(list) {
   const rk = t => (typeof t.rank === 'number') ? t.rank : null;
-  return open.sort((a, b) => {
+  return list.sort((a, b) => {
     const ra = rk(a), rb = rk(b);
     if (ra !== null && rb !== null && ra !== rb) return ra - rb;
     if (ra !== null && rb === null) return -1;
@@ -679,8 +689,10 @@ function rankedOpenTasks() {
     return taskScore(b).score - taskScore(a).score;
   });
 }
+function rankedOpenTasks() { const ws = viewWeek(); return sortRanked(S.tasks.filter(t => t.week === ws && isOpenCandidate(t))); }
+function undatedOpenTasks() { return sortRanked(S.tasks.filter(t => !t.week && isOpenCandidate(t))); }
 const unplacedCount = list => list.filter(t => taskRemaining(t) > 0).length;       // 未配置＝まだ入れていない分が残っているタスク
-function candidateRowsHtml(list, limit) {
+function candidateRowsHtml(list, limit, noRank) {
   const shown = limit ? list.slice(0, limit) : list;
   return shown.map((t, i) => {
     const placed = isPlaced(t), rem = taskRemaining(t);
@@ -688,7 +700,7 @@ function candidateRowsHtml(list, limit) {
     // 配置した日時（今日以降の枠）。押すと、その枠を開く。分けて入れたときは、枠ごとの分数も出す
     const when = placed ? upcomingBlocksOf(t).map(b => `<a class="when" href="#" onclick="gotoBlock('${b.id}');return false">${b.recurrence ? '毎週 ' : fmtMD(b.date) + ' '}${b.startTime}–${b.endTime}${allocOf(t, b.id) !== null && ((t.blockIds || []).length > 1 || rem > 0) ? `（${allocOf(t, b.id)}分）` : ''}</a>`).join('') : '';
     const btn = rem > 0 ? `<button class="btn btn-sm btn-primary" onclick="openPlace('${t.id}')">${placed ? '続きを配置' : '配置'}</button>` : '';
-    return `<div class="cand ${placed ? 'placed' : ''}"><div class="cand-main"><span class="rankno">${i + 1}</span>${t.intent ? `<span class="intent i${t.intent === '◎' ? '1' : '2'}">${h(t.intent)}</span>` : ''}
+    return `<div class="cand ${placed ? 'placed' : ''}"><div class="cand-main">${noRank ? '' : `<span class="rankno">${i + 1}</span>`}${t.intent ? `<span class="intent i${t.intent === '◎' ? '1' : '2'}">${h(t.intent)}</span>` : ''}
       <span class="ttl" title="${h(t.title)}" onclick="openTaskEdit('${t.id}')">${h(t.title)}</span>${btn}</div>
       ${placed ? `<div class="cand-when"><span class="done-tag">${rem > 0 ? '一部配置' : '配置済み'}</span>${when}${rem > 0 ? `<span class="rest-tag">あと${rem}分 未配置</span>` : ''}</div>` : ''}
       <div class="cand-sub ${dueOver(t) ? 'over' : ''}">${h(sub.join('　'))} <a href="#" onclick="openTaskEdit('${t.id}');return false">編集</a></div></div>`;
@@ -701,13 +713,35 @@ function gotoBlock(id) {
   if (!b.recurrence) S.cur = b.date;
   renderAll(); openBlock(id, b.date);
 }
+const weekRangeLabel = ws => `${fmtMD(ws)}〜${fmtMD(addDays(ws, 6))}`;
+// 候補の欄・候補の一覧（モーダル）の中身。確定した週は畳む。week が無いタスクは、下の節に出す
+function candidatesPanelHtml(limit) {
+  const ws = viewWeek(), open = rankedOpenTasks(), undated = undatedOpenTasks();
+  const confirmed = isWeekConfirmed(ws), hidden = weekHidden(ws);
+  let html = '';
+  if (confirmed) html += `<div class="confirmed-note">この週（${weekRangeLabel(ws)}）は確定済みです。候補${open.length}件を${hidden ? '非表示にしています' : '表示しています'}。
+    <a href="#" onclick="toggleWeekCandidates('${ws}');return false">${hidden ? '候補を表示' : '候補を隠す'}</a>　<a href="#" onclick="unconfirmWeek('${ws}');return false">確定を取り消す</a></div>`;
+  if (!hidden) html += open.length ? candidateRowsHtml(open, limit) : '<div class="empty">この週の候補はありません（タスクの「対象の週」が、この週のものを出します）</div>';
+  if (undated.length) html += `<div class="undated-h">週の指定なし（${undated.length}件）</div>` + candidateRowsHtml(undated, limit ? 10 : 0, true);
+  return html;
+}
+function toggleWeekCandidates(ws) {
+  if (_showWeeks.has(ws)) _showWeeks.delete(ws); else _showWeeks.add(ws);
+  renderSide(); if (_candCtx && document.getElementById('modal-bg').classList.contains('open')) openCandidates();
+}
+function unconfirmWeek(ws) {
+  S.confirmedWeeks = S.confirmedWeeks.filter(w => w !== ws); _showWeeks.delete(ws);
+  save(); renderAll(); if (_candCtx && document.getElementById('modal-bg').classList.contains('open')) openCandidates();
+  showToast('確定を取り消しました（候補を、また表示します）');
+}
 function renderSide() {
-  const open = rankedOpenTasks();
-  document.getElementById('task-count').textContent = countLabel(open);
-  document.getElementById('tasks').innerHTML = open.length ? candidateRowsHtml(open, 30) : '<div class="empty">候補はありません</div>';
+  const ws = viewWeek(), open = rankedOpenTasks();
+  const hidden = weekHidden(ws);
+  document.getElementById('task-count').textContent = `${weekRangeLabel(ws)}　${hidden ? '確定済み' : countLabel(open)}`;
+  document.getElementById('tasks').innerHTML = candidatesPanelHtml(30);
   const badge2 = document.getElementById('prop-badge2');
-  const un = unplacedCount(open);
-  if (badge2) { badge2.textContent = un; badge2.classList.toggle('hidden', !un); }   // 件数は、未配置だけ
+  const un = hidden ? 0 : unplacedCount(open);
+  if (badge2) { badge2.textContent = un; badge2.classList.toggle('hidden', !un); }   // 件数は、この週の未配置だけ（確定した週は0）
 }
 function dueOver(t) { return t.dueDate && t.dueDate < today(); }
 function dueLabel(t) { if (!t.dueDate) return ''; const d = Math.round((parseDate(t.dueDate) - parseDate(today())) / 86400000); return d < 0 ? `超過${-d}日` : d === 0 ? '今日' : `あと${d}日`; }
@@ -716,10 +750,10 @@ function dueLabel(t) { if (!t.dueDate) return ''; const d = Math.round((parseDat
 let _candCtx = false;
 function openCandidates() {
   _candCtx = true;
-  const open = rankedOpenTasks();
-  openModal(`<h3>候補（優先順）${open.length ? ` ${countLabel(open)}` : ''}<span><button class="btn btn-sm" onclick="openTaskEdit(null)">＋追加</button> <button class="btn btn-sm" onclick="closeModal()">✕</button></span></h3>
-    <div class="empty" style="margin-bottom:6px">上ほど優先です。「配置」を押して、入れる枠を選びます。配置済みのタスクは、日時が出ます（押すと、その枠を開く。「追加」で、別の枠にも入れられる）。</div>
-    ${open.length ? candidateRowsHtml(open, 0) : '<div class="empty">候補はありません</div>'}`);
+  const ws = viewWeek(), open = rankedOpenTasks(), hidden = weekHidden(ws);
+  openModal(`<h3>候補（優先順）<span><button class="btn btn-sm" onclick="openTaskEdit(null)">＋追加</button> <button class="btn btn-sm" onclick="closeModal()">✕</button></span></h3>
+    <div class="empty" style="margin-bottom:6px"><b>${weekRangeLabel(ws)}</b>　${hidden ? '確定済み' : countLabel(open)}。上ほど優先です。「配置」を押して、入れる枠を選びます。配置済みのタスクは、日時が出ます（押すと、その枠を開く）。週は、カレンダーで切り替えます。</div>
+    ${candidatesPanelHtml(0)}`);
 }
 
 // ───────── rule-based suggestion (イ) ─────────
@@ -811,7 +845,7 @@ function reopenBlock() { if (_bm && _bm.id) openBlock(_bm.id, _bm.viewDate); }
 let _te = null;
 function openTaskEdit(id) {
   _te = id;
-  const t = id ? taskById(id) : { title: '', intent: '', estimateH: null, split: '', dueDate: '', rank: null, scale: 'medium', priority: 'medium' };
+  const t = id ? taskById(id) : { title: '', intent: '', estimateH: null, split: '', dueDate: '', rank: null, scale: 'medium', priority: 'medium', week: viewWeek() };
   if (!t) return;
   const sel = (val, opts) => opts.map(([v, l]) => `<option value="${v}" ${String(val || '') === v ? 'selected' : ''}>${l}</option>`).join('');
   openModal(`<h3>${id ? 'タスクを編集' : 'タスクを追加'}<button class="btn btn-sm" onclick="cancelTaskEdit()">✕</button></h3>
@@ -819,11 +853,14 @@ function openTaskEdit(id) {
     <div class="row"><label>意思</label><select id="te-intent">${sel(t.intent, [['', '（なし）'], ['◎', '◎'], ['〇', '〇']])}</select></div>
     <div class="row"><label>見積(h)</label><input id="te-est" type="number" step="0.25" min="0" inputmode="decimal" value="${t.estimateH || ''}" placeholder="例：2.25"></div>
     <div class="row"><label>分割</label><select id="te-split">${sel(t.split, [['', '（未設定）'], ['NG', 'NG（分けない）'], ['△', '△（なるべく分けない）'], ['〇', '〇（30分まで分けてよい）']])}</select></div>
+    <div class="row"><label>対象の週</label><input id="te-week" type="date" value="${t.week || ''}"><button class="btn btn-sm" type="button" onclick="setTeWeek(0)">今週</button><button class="btn btn-sm" type="button" onclick="setTeWeek(1)">来週</button><button class="btn btn-sm" type="button" onclick="setTeWeek(-1)">なし</button></div>
+    <div class="row"><label></label><span class="empty">この週の候補に出ます（月曜の日付に直して保存）。「なし」は、候補の「週の指定なし」に出ます</span></div>
     <div class="row"><label>期限</label><input id="te-due" type="date" value="${t.dueDate || ''}"></div>
     <div class="row"><label>順位</label><input id="te-rank" type="number" step="1" min="1" inputmode="numeric" value="${typeof t.rank === 'number' ? t.rank : ''}" placeholder="1が最優先。空欄でも可"></div>
     <div class="row"><label>大きさ</label><select id="te-scale">${sel(t.scale, [['small', '小（約15分）'], ['medium', '中（約45分）'], ['large', '大（約90分）'], ['super', '特大（約120分）']])}</select><span class="empty">見積(h)が空のときに使う目安</span></div>
     <div class="foot">${id ? '<button class="btn btn-danger" onclick="deleteTaskFromEdit()">削除</button>' : ''}<span class="spacer"></span><button class="btn" onclick="cancelTaskEdit()">キャンセル</button><button class="btn btn-primary" onclick="saveTaskEdit()">保存</button></div>`);
 }
+function setTeWeek(n) { document.getElementById('te-week').value = n < 0 ? '' : addDays(weekStart(today()), 7 * n); }
 function cancelTaskEdit() { if (_candCtx) openCandidates(); else closeModal(); }
 function saveTaskEdit() {
   const title = document.getElementById('te-title').value.trim();
@@ -832,7 +869,8 @@ function saveTaskEdit() {
   const rank = parseInt(document.getElementById('te-rank').value, 10);
   const intent = document.getElementById('te-intent').value;
   const d = { title, intent: intent || null, estimateH: est > 0 ? est : null, split: document.getElementById('te-split').value || null,
-    dueDate: document.getElementById('te-due').value || null, rank: rank > 0 ? rank : null, scale: document.getElementById('te-scale').value };
+    dueDate: document.getElementById('te-due').value || null, rank: rank > 0 ? rank : null, scale: document.getElementById('te-scale').value,
+    week: document.getElementById('te-week').value ? weekStart(document.getElementById('te-week').value) : null };
   if (d.estimateH) d.scale = scaleFromMin(Math.round(d.estimateH * 60));        // 見積があれば、大きさもそれに合わせる
   if (intent) d.priority = intent === '◎' ? 'high' : 'medium';                  // 意思があれば、優先度もそれに合わせる（期限・優先度の点数に使う）
   const t = _te ? taskById(_te) : null;
@@ -896,10 +934,15 @@ function confirmWeek() {
   const targets = S.blocks.filter(b => isDraft(b) && !b.recurrence && b.date >= ws && b.date <= we);
   const recur = S.blocks.filter(b => isDraft(b) && b.recurrence && Array.from({length: 7}, (_, i) => addDays(ws, i)).some(ds => isBlockOnDate(b, ds)));
   const all = [...targets, ...recur];
-  if (!all.length) { showToast('この週に「仮」の予定はありません'); return; }
-  if (!confirm(`${fmtMD(ws)}〜${fmtMD(we)} の「仮」${all.length}件を確定にします。よろしいですか？`)) return;
+  const cand = rankedOpenTasks(), un = unplacedCount(cand);
+  if (!all.length && isWeekConfirmed(ws)) { showToast('この週は、確定済みです'); return; }
+  const head = all.length ? `${fmtMD(ws)}〜${fmtMD(we)} の「仮」${all.length}件を確定にします。` : `${fmtMD(ws)}〜${fmtMD(we)} に「仮」の枠はありません。この週を、確定済みにします。`;
+  const note = un ? `\nこの週の候補で、枠に入っていないものが${un}件あります（確定後は、候補の欄から隠れます）。` : (cand.length ? '\n確定後は、この週の候補は、候補の欄から隠れます。' : '');
+  if (!confirm(`${head}${note}\nよろしいですか？`)) return;
   all.forEach(b => { b.status = 'confirmed'; });
-  save(); renderAll(); showToast(`${all.length}件を確定しました`);
+  if (!isWeekConfirmed(ws)) S.confirmedWeeks.push(ws);
+  _showWeeks.delete(ws);
+  save(); renderAll(); showToast(`${all.length}件を確定しました${un ? `（未配置の候補${un}件は、隠れました）` : ''}`);
 }
 
 // ───────── review ─────────
@@ -1045,20 +1088,22 @@ function loadSample() {
   const firstDone = blocks.find(b => b.status === 'confirmed' && b.date === today0 && b.startTime === '09:00') || blocks.find(b => b.status === 'confirmed');   // 今日の朝の枠に入れる（今日の振り返りで、タスクごとの○×を試せる）
   if (firstDone) { tasks[0].blockIds.push(firstDone.id); tasks[2].blockIds.push(firstDone.id); }
   // 優先順位（rank。1が最優先）。実際は、Claude（planner）がフェーズ一覧の順位から書く。サンプルでは、期限の順とあえて違う並びにして、「rank」が効くことが見えるようにする
+  [tasks[0], tasks[2]].forEach(t => { t.week = thisMon; });                    // 今週の枠に入っているタスク
+  [tasks[1], tasks[3], tasks[4]].forEach(t => { t.week = nextMon; });        // 来週の候補（「いつかやる整理」は、あえて週の指定なし）
   tasks[3].rank = 1; tasks[1].rank = 2; tasks[4].rank = 3;   // 手順書の見直し → 見積の確認 → 機材の発注。rankが無いタスク（いつかやる整理）は、その後ろ
-  applyData({ blocks, tasks, proposals: [], reviews: [], changes: [], blockTemplates: [{ id: uuid(), title: '作業時間', startTime: '09:00', endTime: '11:00', theme: '導入' }], themes: DEFAULT_THEMES.slice() });
+  applyData({ blocks, tasks, proposals: [], reviews: [], changes: [], confirmedWeeks: [], blockTemplates: [{ id: uuid(), title: '作業時間', startTime: '09:00', endTime: '11:00', theme: '導入' }], themes: DEFAULT_THEMES.slice() });
   lsSet('sched_sample', '1'); save(); S.cur = nextMon; S.view = 'week'; closeModal(); renderAll();
   showToast('サンプルを入れました（右の候補に、タスクが優先順で並びます）');
 }
 function clearAllData() {
   if (!confirm('この端末の予定・タスク・候補・振り返りをすべて消します。よろしいですか？\n（クラウドのデータは消えません）')) return;
-  applyData({ blocks: [], tasks: [], proposals: [], reviews: [], changes: [], blockTemplates: [], themes: DEFAULT_THEMES.slice() });
+  applyData({ blocks: [], tasks: [], proposals: [], reviews: [], changes: [], confirmedWeeks: [], blockTemplates: [], themes: DEFAULT_THEMES.slice() });
   lsSet('sched_sample', ''); save(); closeModal(); renderAll(); showToast('データを消しました');
 }
-function payload() { return { blocks: S.blocks, tasks: S.tasks, blockTemplates: S.blockTemplates, themes: S.themes, reviews: S.reviews, proposals: S.proposals, changes: S.changes, savedAt: new Date().toISOString() }; }
+function payload() { return { blocks: S.blocks, tasks: S.tasks, blockTemplates: S.blockTemplates, themes: S.themes, reviews: S.reviews, proposals: S.proposals, changes: S.changes, confirmedWeeks: S.confirmedWeeks, savedAt: new Date().toISOString() }; }
 function applyData(d) {
   if (!d || typeof d !== 'object' || !Array.isArray(d.blocks)) throw new Error('データ形式が不正です（blocksがありません）');
-  for (const k of ['blocks', 'tasks', 'blockTemplates', 'themes', 'reviews', 'proposals', 'changes']) if (d[k] !== undefined) S[k] = d[k];
+  for (const k of ['blocks', 'tasks', 'blockTemplates', 'themes', 'reviews', 'proposals', 'changes', 'confirmedWeeks']) if (d[k] !== undefined) S[k] = d[k];
   normalizeData();
 }
 async function gistPush() {
