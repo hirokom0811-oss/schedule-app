@@ -198,7 +198,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 
 <script>
 'use strict';
-const APP_VERSION = 'v0.4.1';
+const APP_VERSION = 'v0.4.2';
 const GIST_FILE = 'schedule_data.json';
 const DAY_START = 6, DAY_END = 23;       // 表示する時間帯
 // 拡大レベル：1時間の高さ(px)と、ドラッグの刻み(分)。拡大するほど細かく動かせる（Shift押下中は5分）
@@ -725,7 +725,7 @@ function openTaskEdit(id) {
   if (!t) return;
   const sel = (val, opts) => opts.map(([v, l]) => `<option value="${v}" ${String(val || '') === v ? 'selected' : ''}>${l}</option>`).join('');
   openModal(`<h3>${id ? 'タスクを編集' : 'タスクを追加'}<button class="btn btn-sm" onclick="cancelTaskEdit()">✕</button></h3>
-    <div class="row"><label>名前</label><input id="te-title" value="${h(t.title)}" placeholder="例：導7-3-1 製品一覧整備"></div>
+    <div class="row"><label>名前</label><input id="te-title" value="${h(t.title)}" placeholder="例：資料の下書き"></div>
     <div class="row"><label>意思</label><select id="te-intent">${sel(t.intent, [['', '（なし）'], ['◎', '◎'], ['〇', '〇']])}</select></div>
     <div class="row"><label>見積(h)</label><input id="te-est" type="number" step="0.25" min="0" inputmode="decimal" value="${t.estimateH || ''}" placeholder="例：2.25"></div>
     <div class="row"><label>分割</label><select id="te-split">${sel(t.split, [['', '（未設定）'], ['NG', 'NG（分けない）'], ['△', '△（なるべく分けない）'], ['〇', '〇（30分まで分けてよい）']])}</select></div>
