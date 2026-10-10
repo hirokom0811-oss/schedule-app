@@ -80,7 +80,8 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 .blk.tiny .t { font-size: 10px; }
 .blk.tiny .tm, .blk.tiny .tag, .blk.tiny .grip { display: none; }
 .blk.tiny .resize { height: 3px; }
-.blk .tag { position: absolute; top: 1px; right: 14px; font-size: 9px; background: #fff; border: 1px solid var(--warn); color: var(--warn); border-radius: 3px; padding: 0 3px; }
+.blk .tag { position: absolute; top: 1px; right: 14px; font-size: 9px; background: #fff; border: 1px solid var(--warn); color: var(--warn); border-radius: 3px; padding: 0 3px; cursor: pointer; }
+.blk .tag:hover { background: var(--warn); color: #fff; }
 .blk .grip { position: absolute; top: 0; right: 0; width: 14px; height: 14px; font-size: 10px; text-align: center; cursor: grab; touch-action: none; color: var(--muted); }
 .blk .resize { position: absolute; left: 0; right: 0; bottom: 0; height: 6px; cursor: ns-resize; touch-action: none; }
 .blk.dragging { opacity: .6; z-index: 10; box-shadow: 0 4px 12px rgba(0,0,0,.25); }
@@ -162,6 +163,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
   /* 指で押せる大きさ（目安44px）に近づける：移動つまみと長さ変更の帯 */
   .blk .grip { width: 28px; height: 28px; font-size: 16px; line-height: 28px; }
   .blk .resize { height: 16px; }
+  .blk .tag { font-size: 11px; padding: 3px 9px; right: 32px; top: 2px; }   /* 指で押せる大きさ */
   .grid-body.multi .blk .tag { display: none; }   /* 列が狭い週ビューでは「仮」ラベルを隠す（斜線で見分ける）。日ビューでは出す */
   .rv-btns button { width: 52px; height: 40px; }
   .btn-sm { padding: 6px 10px; }
@@ -205,7 +207,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 
 <script>
 'use strict';
-const APP_VERSION = 'v0.4.5';
+const APP_VERSION = 'v0.4.6';
 const GIST_FILE = 'schedule_data.json';
 const DAY_START = 6, DAY_END = 23;       // 表示する時間帯
 // 拡大レベル：1時間の高さ(px)と、ドラッグの刻み(分)。拡大するほど細かく動かせる（Shift押下中は5分）
@@ -243,6 +245,20 @@ function fromMin(m) { return `${pad(Math.floor(m/60))}:${pad(m%60)}`; }
 function h(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function dowLabel(ds) { return DN[parseDate(ds).getDay()]; }
 function fmtMD(ds) { const d = parseDate(ds); return `${d.getMonth()+1}/${d.getDate()}(${DN[d.getDay()]})`; }
+function confirmOne(id) {
+  const b = blockById(id); if (!b || !isDraft(b)) return;
+  b.status = 'confirmed'; save(); renderAll();
+  showToastUndo(`「${b.title || '枠'} ${b.startTime}–${b.endTime}」を確定にしました`, () => { b.status = 'draft'; save(); renderAll(); showToast('仮に戻しました'); });
+}
+// 「元に戻す」ボタンつきの通知（6秒）
+function showToastUndo(msg, undo) {
+  const t = document.getElementById('toast'); t.innerHTML = '';
+  const sp = document.createElement('span'); sp.textContent = msg + '　'; t.appendChild(sp);
+  const bt = document.createElement('button'); bt.textContent = '元に戻す'; bt.className = 'btn btn-sm'; bt.style.marginLeft = '4px';
+  bt.onclick = () => { clearTimeout(showToast._t); t.style.display = 'none'; undo(); };
+  t.appendChild(bt); t.style.display = 'block'; t.style.pointerEvents = 'auto';
+  clearTimeout(showToast._t); showToast._t = setTimeout(() => { t.style.display = 'none'; }, 6000);
+}
 function showToast(msg) { const t = document.getElementById('toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(showToast._t); showToast._t = setTimeout(() => t.style.display = 'none', 2600); }
 
 // ───────── state / storage ─────────
@@ -453,7 +469,7 @@ function renderGrid(con, days) {
       const sizeCls = height < 20 ? 'tiny' : height < 34 ? 'short' : '';
       html += `<div class="blk ${themeClass(b.theme)} ${isDraft(b) ? 'draft' : ''} ${sizeCls}" data-id="${b.id}" data-date="${ds}"
         style="top:${top}px;height:${height}px;left:calc(${lane*w}% + 1px);width:calc(${w}% - 3px)">
-        ${isDraft(b) ? '<span class="tag">仮</span>' : ''}<span class="grip" title="ドラッグで移動">⠿</span>
+        ${isDraft(b) ? '<span class="tag" data-tag="1" title="押すと、この枠だけ確定にします">仮</span>' : ''}<span class="grip" title="ドラッグで移動">⠿</span>
         <div class="t">${h(b.title || '作業枠')}</div><div class="tm">${b.startTime}–${b.endTime}${st.total ? ` ・${st.done}/${st.total}` : ''}</div>
         ${(days.length === 1 || height > 56) && height >= 40 ? ts.slice(0, 5).map(t => `<div class="tk ${t.completed ? 'done' : ''}">${h(t.title)}</div>`).join('') : ''}
         <div class="resize"></div></div>`;
@@ -488,7 +504,10 @@ function bindGrid() {
     });
   });
   document.querySelectorAll('.blk').forEach(el => {
-    el.addEventListener('click', e => { if (_justDragged) return; openBlock(el.dataset.id, el.dataset.date); });
+    el.addEventListener('click', e => {
+      if (e.target.closest && e.target.closest('[data-tag]')) { confirmOne(el.dataset.id); return; }   // 「仮」の印：この枠だけ確定にする
+      if (_justDragged) return; openBlock(el.dataset.id, el.dataset.date);
+    });
     el.addEventListener('pointerdown', onBlkDown);
     // 長押しで持ち上げたあとは、指を動かしても画面がスクロールしないようにする（iOSは非passiveのtouchmoveで止める）
     el.addEventListener('touchmove', e => { if (_drag && _drag.lifted && e.cancelable) e.preventDefault(); }, { passive: false });
@@ -531,6 +550,7 @@ function liftBlock() {
 }
 function onBlkDown(e) {
   if (e.button !== 0) return;
+  if (e.target.closest && e.target.closest('[data-tag]')) return;   // 「仮」の印を押したときは、ドラッグ・長押しを始めない
   const el = e.currentTarget;
   const onGrip = e.target.classList.contains('grip'), onResize = e.target.classList.contains('resize');
   const b = blockById(el.dataset.id); if (!b) return;
