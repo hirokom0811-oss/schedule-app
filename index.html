@@ -103,6 +103,14 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 .month .chip { margin-top: 2px; padding: 1px 4px; border-radius: 3px; border: 1px solid; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* side */
+.cand { padding: 6px 0; border-bottom: 1px solid var(--bg); }
+.cand-main { display: flex; align-items: center; gap: 6px; }
+.cand-main .ttl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; font-size: 13px; }
+.cand-sub { font-size: 11px; color: var(--muted); margin: 2px 0 0 26px; }
+.cand-sub.over { color: var(--danger); }
+.intent { flex: none; font-size: 12px; font-weight: 700; border-radius: 4px; padding: 0 5px; }
+.intent.i1 { background: #fee2e2; color: #b91c1c; }
+.intent.i2 { background: #ffedd5; color: #c2410c; }
 .rankno { flex: none; width: 20px; height: 20px; border-radius: 50%; background: var(--primary-soft); color: var(--primary); font-size: 11px; font-weight: 700; text-align: center; line-height: 20px; }
 .prop { border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; margin-bottom: 6px; font-size: 12px; }
 .prop .why { color: var(--muted); margin: 2px 0 4px; }
@@ -182,7 +190,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 <main>
   <div id="cal-wrap"><div id="cal"></div></div>
   <aside id="side">
-    <div class="card"><h2><span>候補（優先順）</span><span class="empty" id="task-count"></span></h2><div id="tasks"></div></div>
+    <div class="card"><h2><span>候補（優先順）</span><span><span class="empty" id="task-count"></span> <button class="btn btn-sm" onclick="openTaskEdit(null)">＋追加</button></span></h2><div id="tasks"></div></div>
   </aside>
 </main>
 <div id="modal-bg"><div class="modal" id="modal"></div></div>
@@ -190,7 +198,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 
 <script>
 'use strict';
-const APP_VERSION = 'v0.4.0';
+const APP_VERSION = 'v0.4.1';
 const GIST_FILE = 'schedule_data.json';
 const DAY_START = 6, DAY_END = 23;       // 表示する時間帯
 // 拡大レベル：1時間の高さ(px)と、ドラッグの刻み(分)。拡大するほど細かく動かせる（Shift押下中は5分）
@@ -205,6 +213,11 @@ const snapMin = (e) => (e && e.shiftKey) ? 5 : ZOOMS[S.zoom].snap;
 const DN = ['日','月','火','水','木','金','土'];
 const SCALE_MIN = { small: 15, medium: 45, large: 90, super: 120 };
 const SCALE_LABEL = { small: '小', medium: '中', large: '大', super: '特大' };
+// タスクの見積（分）。時間の数値（estimateH）があればそれ、なければ大きさ（小中大特大）の目安
+const taskMin = t => (typeof t.estimateH === 'number' && t.estimateH > 0) ? Math.round(t.estimateH * 60) : (SCALE_MIN[t.scale] || 15);
+const fmtH = x => (Math.round(x * 100) / 100) + 'h';
+const estLabel = t => (typeof t.estimateH === 'number' && t.estimateH > 0) ? fmtH(t.estimateH) : (SCALE_LABEL[t.scale] || '');
+function scaleFromMin(m) { const c = { small: 15, medium: 45, large: 90, super: 120 }; return Object.keys(c).reduce((a, k) => Math.abs(c[k] - m) < Math.abs(c[a] - m) ? k : a, 'small'); }
 const DEFAULT_THEMES = ['導入','活用','ひとづくり','コミュ・雑務'];
 
 // ───────── util ─────────
@@ -283,7 +296,7 @@ const blockTasks = id => S.tasks.filter(t => (t.blockIds || []).includes(id));
 function blocksOn(ds) { return S.blocks.filter(b => isBlockOnDate(b, ds)).sort((a, b) => a.startTime.localeCompare(b.startTime)); }
 function blockStats(b) {
   const ts = blockTasks(b.id);
-  const used = ts.reduce((s, t) => s + (SCALE_MIN[t.scale] || 15), 0);
+  const used = ts.reduce((s, t) => s + taskMin(t), 0);
   return { total: ts.length, done: ts.filter(t => t.completed).length, used, free: (toMin(b.endTime) - toMin(b.startTime)) - used };
 }
 function effectiveTitle(b) { const ts = blockTasks(b.id); return ts.length ? ts.map(t => t.title).join('; ') : (b.title || '作業枠'); }
@@ -591,11 +604,13 @@ function rankedOpenTasks() {
 }
 function candidateRowsHtml(list, limit) {
   const shown = limit ? list.slice(0, limit) : list;
-  return shown.map((t, i) => `
-    <div class="task-row"><span class="rankno">${i + 1}</span><span class="ttl" title="${h(t.title)}">${h(t.title)}</span>
-    <span class="meta ${dueOver(t) ? 'over' : ''}">${dueLabel(t)}${t.scale ? ' ' + SCALE_LABEL[t.scale] : ''}</span>
-    <button class="btn btn-sm btn-primary" onclick="openPlace('${t.id}')">配置</button></div>`).join('')
-    + (limit && list.length > limit ? `<div class="empty">他${list.length - limit}件（上の「候補」ボタンで、すべて見られます）</div>` : '');
+  return shown.map((t, i) => {
+    const sub = [t.estimateH ? `見積 ${fmtH(t.estimateH)}` : (t.scale ? `見積 ${SCALE_LABEL[t.scale]}` : ''), t.split ? `分割${t.split}` : '', dueLabel(t)].filter(Boolean);
+    return `<div class="cand"><div class="cand-main"><span class="rankno">${i + 1}</span>${t.intent ? `<span class="intent i${t.intent === '◎' ? '1' : '2'}">${h(t.intent)}</span>` : ''}
+      <span class="ttl" title="${h(t.title)}" onclick="openTaskEdit('${t.id}')">${h(t.title)}</span>
+      <button class="btn btn-sm btn-primary" onclick="openPlace('${t.id}')">配置</button></div>
+      <div class="cand-sub ${dueOver(t) ? 'over' : ''}">${h(sub.join('　'))} <a href="#" onclick="openTaskEdit('${t.id}');return false">編集</a></div></div>`;
+  }).join('') + (limit && list.length > limit ? `<div class="empty">他${list.length - limit}件（上の「候補」ボタンで、すべて見られます）</div>` : '');
 }
 function renderSide() {
   const open = rankedOpenTasks();
@@ -612,7 +627,7 @@ let _candCtx = false;
 function openCandidates() {
   _candCtx = true;
   const open = rankedOpenTasks();
-  openModal(`<h3>候補（優先順）${open.length ? ` ${open.length}件` : ''}<button class="btn btn-sm" onclick="closeModal()">✕</button></h3>
+  openModal(`<h3>候補（優先順）${open.length ? ` ${open.length}件` : ''}<span><button class="btn btn-sm" onclick="openTaskEdit(null)">＋追加</button> <button class="btn btn-sm" onclick="closeModal()">✕</button></span></h3>
     <div class="empty" style="margin-bottom:6px">上ほど優先です。「配置」を押して、入れる枠を選びます。</div>
     ${open.length ? candidateRowsHtml(open, 0) : '<div class="empty">候補はありません（すべての枠に入っています）</div>'}`);
 }
@@ -633,7 +648,7 @@ function taskScore(t) {
 function suggestFor(b) {
   const free = blockStats(b).free;
   return S.tasks.filter(t => !t.completed && !(t.blockIds || []).includes(b.id))
-    .map(t => ({ t, ...taskScore(t), min: SCALE_MIN[t.scale] || 15 }))
+    .map(t => ({ t, ...taskScore(t), min: taskMin(t) }))
     .filter(x => x.min <= Math.max(free, 0))
     .sort((a, b2) => b2.score - a.score || a.min - b2.min).slice(0, 5);
 }
@@ -670,7 +685,7 @@ function blockTasksSection(b, viewDate) {
   const unplaced = S.tasks.filter(t => !t.completed && !(t.blockIds || []).includes(b.id));
   const sug = suggestFor(b);
   return `<div class="sect"><h4>この枠のタスク（${st.done}/${st.total}完了 ／ 見積${st.used}分 ／ 残${Math.max(st.free, 0)}分）</h4>
-    ${ts.map(t => `<div class="task-row"><input type="checkbox" ${t.completed ? 'checked' : ''} onchange="toggleTask('${t.id}')"><span class="ttl">${h(t.title)}</span><span class="meta">${SCALE_LABEL[t.scale] || ''}</span><button class="btn btn-sm" onclick="unlinkFromModal('${t.id}')">外す</button></div>`).join('') || '<div class="empty">まだありません</div>'}
+    ${ts.map(t => `<div class="task-row"><input type="checkbox" ${t.completed ? 'checked' : ''} onchange="toggleTask('${t.id}')"><span class="ttl">${h(t.title)}</span><span class="meta">${estLabel(t)}</span><button class="btn btn-sm" onclick="unlinkFromModal('${t.id}')">外す</button></div>`).join('') || '<div class="empty">まだありません</div>'}
     <div class="row" style="margin-top:6px"><select id="bm-addtask"><option value="">タスクを追加…</option>${unplaced.map(t => `<option value="${t.id}">${h(t.title)}</option>`).join('')}</select>
     <button class="btn btn-sm" onclick="addTaskFromModal()">追加</button></div></div>
     <div class="sect"><h4>おすすめ（期限・優先度・残り時間から）</h4>
@@ -702,10 +717,52 @@ function addTaskFromModal() { const v = document.getElementById('bm-addtask').va
 function linkFromSuggest(taskId) { linkTask(taskId, _bm.id); renderAll(); reopenBlock(); }
 function reopenBlock() { if (_bm && _bm.id) openBlock(_bm.id, _bm.viewDate); }
 
+// ───────── task edit modal（追加・編集・削除）─────────
+let _te = null;
+function openTaskEdit(id) {
+  _te = id;
+  const t = id ? taskById(id) : { title: '', intent: '', estimateH: null, split: '', dueDate: '', rank: null, scale: 'medium', priority: 'medium' };
+  if (!t) return;
+  const sel = (val, opts) => opts.map(([v, l]) => `<option value="${v}" ${String(val || '') === v ? 'selected' : ''}>${l}</option>`).join('');
+  openModal(`<h3>${id ? 'タスクを編集' : 'タスクを追加'}<button class="btn btn-sm" onclick="cancelTaskEdit()">✕</button></h3>
+    <div class="row"><label>名前</label><input id="te-title" value="${h(t.title)}" placeholder="例：導7-3-1 製品一覧整備"></div>
+    <div class="row"><label>意思</label><select id="te-intent">${sel(t.intent, [['', '（なし）'], ['◎', '◎'], ['〇', '〇']])}</select></div>
+    <div class="row"><label>見積(h)</label><input id="te-est" type="number" step="0.25" min="0" inputmode="decimal" value="${t.estimateH || ''}" placeholder="例：2.25"></div>
+    <div class="row"><label>分割</label><select id="te-split">${sel(t.split, [['', '（未設定）'], ['NG', 'NG（分けない）'], ['△', '△（なるべく分けない）'], ['〇', '〇（30分まで分けてよい）']])}</select></div>
+    <div class="row"><label>期限</label><input id="te-due" type="date" value="${t.dueDate || ''}"></div>
+    <div class="row"><label>順位</label><input id="te-rank" type="number" step="1" min="1" inputmode="numeric" value="${typeof t.rank === 'number' ? t.rank : ''}" placeholder="1が最優先。空欄でも可"></div>
+    <div class="row"><label>大きさ</label><select id="te-scale">${sel(t.scale, [['small', '小（約15分）'], ['medium', '中（約45分）'], ['large', '大（約90分）'], ['super', '特大（約120分）']])}</select><span class="empty">見積(h)が空のときに使う目安</span></div>
+    <div class="foot">${id ? '<button class="btn btn-danger" onclick="deleteTaskFromEdit()">削除</button>' : ''}<span class="spacer"></span><button class="btn" onclick="cancelTaskEdit()">キャンセル</button><button class="btn btn-primary" onclick="saveTaskEdit()">保存</button></div>`);
+}
+function cancelTaskEdit() { if (_candCtx) openCandidates(); else closeModal(); }
+function saveTaskEdit() {
+  const title = document.getElementById('te-title').value.trim();
+  if (!title) { showToast('名前を入れてください'); return; }
+  const est = parseFloat(document.getElementById('te-est').value);
+  const rank = parseInt(document.getElementById('te-rank').value, 10);
+  const intent = document.getElementById('te-intent').value;
+  const d = { title, intent: intent || null, estimateH: est > 0 ? est : null, split: document.getElementById('te-split').value || null,
+    dueDate: document.getElementById('te-due').value || null, rank: rank > 0 ? rank : null, scale: document.getElementById('te-scale').value };
+  if (d.estimateH) d.scale = scaleFromMin(Math.round(d.estimateH * 60));        // 見積があれば、大きさもそれに合わせる
+  if (intent) d.priority = intent === '◎' ? 'high' : 'medium';                  // 意思があれば、優先度もそれに合わせる（期限・優先度の点数に使う）
+  const t = _te ? taskById(_te) : null;
+  if (t) Object.assign(t, d);
+  else S.tasks.push({ id: uuid(), completed: false, blockIds: [], priority: 'medium', createdAt: new Date().toISOString(), ...d });
+  save(); const back = _candCtx; closeModal(); renderAll(); showToast('保存しました');
+  if (back) openCandidates();
+}
+function deleteTaskFromEdit() {
+  const t = taskById(_te); if (!t) return;
+  if (!confirm(`「${t.title}」を削除します（枠に入っている場合は、枠から外れます）。よろしいですか？`)) return;
+  S.tasks = S.tasks.filter(x => x.id !== _te);
+  save(); const back = _candCtx; closeModal(); renderAll(); showToast('削除しました');
+  if (back) openCandidates();
+}
+
 // ───────── place task modal ─────────
 function openPlace(taskId) {
   const t = taskById(taskId); if (!t) return;
-  const need = SCALE_MIN[t.scale] || 15;
+  const need = taskMin(t);
   const days = rangeDays();
   const rows = [];
   days.forEach(ds => blocksOn(ds).forEach(b => rows.push({ ds, b, free: Math.max(blockStats(b).free, 0) })));
