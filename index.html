@@ -103,6 +103,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 .month .chip { margin-top: 2px; padding: 1px 4px; border-radius: 3px; border: 1px solid; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* side */
+.rankno { flex: none; width: 20px; height: 20px; border-radius: 50%; background: var(--primary-soft); color: var(--primary); font-size: 11px; font-weight: 700; text-align: center; line-height: 20px; }
 .prop { border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; margin-bottom: 6px; font-size: 12px; }
 .prop .why { color: var(--muted); margin: 2px 0 4px; }
 .prop .acts { display: flex; gap: 6px; }
@@ -171,7 +172,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
   </div>
   <span class="zoom-ctl"><button class="btn" id="zoom-out" onclick="zoomBy(-1)" title="縮小">－</button><span class="lbl" id="zoom-lbl"></span><button class="btn" id="zoom-in" onclick="zoomBy(1)" title="拡大">＋</button></span>
   <span class="spacer"></span>
-  <button class="btn" id="prop-btn" onclick="openProposals()">候補<span class="badge hidden" id="prop-badge2">0</span></button>
+  <button class="btn" id="prop-btn" onclick="openCandidates()">候補<span class="badge hidden" id="prop-badge2">0</span></button>
   <button class="btn" id="confirm-btn" onclick="confirmWeek()">この週を確定</button>
   <button class="btn" id="review-btn" onclick="openReview()">📝 振り返り</button>
   <button class="btn" onclick="openIcs()">ICS</button>
@@ -181,8 +182,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 <main>
   <div id="cal-wrap"><div id="cal"></div></div>
   <aside id="side">
-    <div class="card"><h2><span>候補（Claudeの提案）<span class="badge hidden" id="prop-badge">0</span></span></h2><div id="proposals"></div></div>
-    <div class="card"><h2><span>未配置のタスク</span><span class="empty" id="task-count"></span></h2><div id="tasks"></div></div>
+    <div class="card"><h2><span>候補（優先順）</span><span class="empty" id="task-count"></span></h2><div id="tasks"></div></div>
   </aside>
 </main>
 <div id="modal-bg"><div class="modal" id="modal"></div></div>
@@ -190,7 +190,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 
 <script>
 'use strict';
-const APP_VERSION = 'v0.3.2';
+const APP_VERSION = 'v0.4.0';
 const GIST_FILE = 'schedule_data.json';
 const DAY_START = 6, DAY_END = 23;       // 表示する時間帯
 // 拡大レベル：1時間の高さ(px)と、ドラッグの刻み(分)。拡大するほど細かく動かせる（Shift押下中は5分）
@@ -575,60 +575,47 @@ function rangeDays() {
   const d = parseDate(S.cur); const n = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
   return Array.from({length: n}, (_, i) => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(i+1)}`);
 }
-function renderSide() {
-  const range = rangeDays(), first = range[0], last = range[range.length - 1];
-  const pend = S.proposals.filter(p => p.status === 'pending');
-  const badge = document.getElementById('prop-badge');
-  badge.textContent = pend.length; badge.classList.toggle('hidden', !pend.length);
-  const badge2 = document.getElementById('prop-badge2');
-  if (badge2) { badge2.textContent = pend.length; badge2.classList.toggle('hidden', !pend.length); }
-  if (_propModal) renderProposalsModal();
-  const pbox = document.getElementById('proposals');
-  const shown = pend.filter(p => p.date >= first && p.date <= last).sort((a, b) => a.date.localeCompare(b.date));
-  let html = '';
-  shown.forEach(p => html += proposalHtml(p));
-  if (!shown.length) html = `<div class="empty">${pend.length ? `この期間の候補はありません（他の期間に${pend.length}件）` : '候補はありません'}</div>`;
-  pbox.innerHTML = html;
-
+// 候補＝まだどの枠にも入っていない未完了のタスクを、優先順に並べたもの。
+// 順位は、Claude（planner）が書く `rank`（1が最優先）。`rank` が無いタスクは、その後ろに、期限・優先度の点数順で並ぶ。
+// どの枠に入れるかは、使う人が選ぶ（「配置」→ 枠を選ぶ）。
+function rankedOpenTasks() {
   const open = S.tasks.filter(t => !t.completed && !(t.blockIds || []).some(id => blockById(id)));
-  open.sort((a, b) => taskScore(b).score - taskScore(a).score);
-  document.getElementById('task-count').textContent = `${open.length}件`;
-  document.getElementById('tasks').innerHTML = open.length ? open.slice(0, 30).map(t => `
-    <div class="task-row"><span class="ttl" title="${h(t.title)}">${h(t.title)}</span>
+  const rk = t => (typeof t.rank === 'number') ? t.rank : null;
+  return open.sort((a, b) => {
+    const ra = rk(a), rb = rk(b);
+    if (ra !== null && rb !== null && ra !== rb) return ra - rb;
+    if (ra !== null && rb === null) return -1;
+    if (ra === null && rb !== null) return 1;
+    return taskScore(b).score - taskScore(a).score;
+  });
+}
+function candidateRowsHtml(list, limit) {
+  const shown = limit ? list.slice(0, limit) : list;
+  return shown.map((t, i) => `
+    <div class="task-row"><span class="rankno">${i + 1}</span><span class="ttl" title="${h(t.title)}">${h(t.title)}</span>
     <span class="meta ${dueOver(t) ? 'over' : ''}">${dueLabel(t)}${t.scale ? ' ' + SCALE_LABEL[t.scale] : ''}</span>
-    <button class="btn btn-sm" onclick="openPlace('${t.id}')">配置</button></div>`).join('') + (open.length > 30 ? `<div class="empty">他${open.length - 30}件</div>` : '')
-    : '<div class="empty">未配置のタスクはありません</div>';
+    <button class="btn btn-sm btn-primary" onclick="openPlace('${t.id}')">配置</button></div>`).join('')
+    + (limit && list.length > limit ? `<div class="empty">他${list.length - limit}件（上の「候補」ボタンで、すべて見られます）</div>` : '');
+}
+function renderSide() {
+  const open = rankedOpenTasks();
+  document.getElementById('task-count').textContent = `${open.length}件`;
+  document.getElementById('tasks').innerHTML = open.length ? candidateRowsHtml(open, 30) : '<div class="empty">候補はありません（すべての枠に入っています）</div>';
+  const badge2 = document.getElementById('prop-badge2');
+  if (badge2) { badge2.textContent = open.length; badge2.classList.toggle('hidden', !open.length); }
 }
 function dueOver(t) { return t.dueDate && t.dueDate < today(); }
 function dueLabel(t) { if (!t.dueDate) return ''; const d = Math.round((parseDate(t.dueDate) - parseDate(today())) / 86400000); return d < 0 ? `超過${-d}日` : d === 0 ? '今日' : `あと${d}日`; }
-function proposalHtml(p) {
-  const t = taskById(p.taskId), b = blockById(p.blockId);
-  let what = '';
-  if (p.kind === 'link') what = `「${h(t ? t.title : '(削除済み)')}」を ${b ? h(b.title || '作業枠') + ' ' + b.startTime + '–' + b.endTime : '(枠なし)'} に入れる`;
-  else if (p.kind === 'move') what = `${b ? h(b.title || '作業枠') : '(枠なし)'} を ${fmtMD(p.toDate)} ${p.toStart}–${p.toEnd} に移す`;
-  return `<div class="prop"><div><b>${fmtMD(p.date)}</b> ${what}</div>${p.reason ? `<div class="why">${h(p.reason)}</div>` : ''}
-    <div class="acts"><button class="btn btn-sm btn-primary" onclick="approveProposal('${p.id}')">承認</button><button class="btn btn-sm" onclick="dismissProposal('${p.id}')">却下</button></div></div>`;
+// 候補の一覧（モーダル）：スマホでは、右の欄がカレンダーの下にあって見えにくいため、ヘッダーのボタンからも開けるようにする。
+// ここから「配置」して、枠を選んで入れると、この一覧に戻る（続けて次のタスクを入れられる）。
+let _candCtx = false;
+function openCandidates() {
+  _candCtx = true;
+  const open = rankedOpenTasks();
+  openModal(`<h3>候補（優先順）${open.length ? ` ${open.length}件` : ''}<button class="btn btn-sm" onclick="closeModal()">✕</button></h3>
+    <div class="empty" style="margin-bottom:6px">上ほど優先です。「配置」を押して、入れる枠を選びます。</div>
+    ${open.length ? candidateRowsHtml(open, 0) : '<div class="empty">候補はありません（すべての枠に入っています）</div>'}`);
 }
-// 候補の一覧（モーダル）：期間に関係なく、承認待ちをすべて日付順に出す。スマホでは候補欄がカレンダーの下で見えにくいため
-let _propModal = false;
-function openProposals() { _propModal = true; renderProposalsModal(); }
-function renderProposalsModal() {
-  const pend = S.proposals.filter(p => p.status === 'pending').sort((a, b) => a.date.localeCompare(b.date));
-  openModal(`<h3>候補（Claudeの提案）${pend.length ? ` ${pend.length}件` : ''}<button class="btn btn-sm" onclick="closeModal()">✕</button></h3>
-    ${pend.map(p => proposalHtml(p)).join('') || '<div class="empty">承認待ちの候補はありません</div>'}`);
-}
-function approveProposal(id) {
-  const p = S.proposals.find(x => x.id === id); if (!p) return;
-  if (p.kind === 'link') {
-    if (!taskById(p.taskId) || !blockById(p.blockId)) { showToast('対象のタスクか枠が見つかりません'); return; }
-    linkTask(p.taskId, p.blockId);
-  } else if (p.kind === 'move') {
-    if (!blockById(p.blockId)) { showToast('対象の枠が見つかりません'); return; }
-    updateBlock(p.blockId, { date: p.toDate, startTime: p.toStart, endTime: p.toEnd }, 'move');
-  }
-  p.status = 'approved'; p.decidedAt = new Date().toISOString(); save(); renderAll(); showToast('承認して反映しました');
-}
-function dismissProposal(id) { const p = S.proposals.find(x => x.id === id); if (!p) return; p.status = 'dismissed'; p.decidedAt = new Date().toISOString(); save(); renderAll(); }
 
 // ───────── rule-based suggestion (イ) ─────────
 function taskScore(t) {
@@ -652,8 +639,8 @@ function suggestFor(b) {
 }
 
 // ───────── modal helpers ─────────
-function openModal(html) { if (!/候補（Claudeの提案）/.test(html.slice(0, 80))) _propModal = false; document.getElementById('modal').innerHTML = html; document.getElementById('modal-bg').classList.add('open'); }
-function closeModal() { _propModal = false; document.getElementById('modal-bg').classList.remove('open'); document.getElementById('modal').innerHTML = ''; }
+function openModal(html) { document.getElementById('modal').innerHTML = html; document.getElementById('modal-bg').classList.add('open'); }
+function closeModal() { _candCtx = false; document.getElementById('modal-bg').classList.remove('open'); document.getElementById('modal').innerHTML = ''; }
 document.getElementById('modal-bg').addEventListener('mousedown', e => { if (e.target.id === 'modal-bg') closeModal(); });
 
 // ───────── block modal ─────────
@@ -718,14 +705,21 @@ function reopenBlock() { if (_bm && _bm.id) openBlock(_bm.id, _bm.viewDate); }
 // ───────── place task modal ─────────
 function openPlace(taskId) {
   const t = taskById(taskId); if (!t) return;
+  const need = SCALE_MIN[t.scale] || 15;
   const days = rangeDays();
   const rows = [];
-  days.forEach(ds => blocksOn(ds).forEach(b => rows.push({ ds, b })));
-  openModal(`<h3>「${h(t.title)}」を配置<button class="btn btn-sm" onclick="closeModal()">✕</button></h3>
-    <div class="empty" style="margin-bottom:6px">表示中の期間の枠から選びます（見積${SCALE_MIN[t.scale] || 15}分）</div>
-    ${rows.map(({ ds, b }) => { const st = blockStats(b); return `<div class="task-row"><span class="ttl">${fmtMD(ds)} ${b.startTime}–${b.endTime} ${h(b.title || '作業枠')}${isDraft(b) ? '（仮）' : ''}</span><span class="meta ${st.free < (SCALE_MIN[t.scale] || 15) ? 'over' : ''}">残${Math.max(st.free, 0)}分</span><button class="btn btn-sm" onclick="placeTask('${t.id}','${b.id}')">入れる</button></div>`; }).join('') || '<div class="empty">この期間に枠がありません</div>'}`);
+  days.forEach(ds => blocksOn(ds).forEach(b => rows.push({ ds, b, free: Math.max(blockStats(b).free, 0) })));
+  const row = ({ ds, b, free }) => `<div class="task-row" style="${free < need ? 'opacity:.55' : ''}"><span class="ttl">${fmtMD(ds)} ${b.startTime}–${b.endTime} ${h(b.title || '作業枠')}${isDraft(b) ? '（仮）' : ''}</span><span class="meta ${free < need ? 'over' : ''}">残${free}分</span><button class="btn btn-sm btn-primary" onclick="placeTask('${t.id}','${b.id}')">入れる</button></div>`;
+  openModal(`<h3>「${h(t.title)}」を、どの枠に入れますか？<button class="btn btn-sm" onclick="closeModal()">✕</button></h3>
+    <div class="empty" style="margin-bottom:6px">${S.view === 'day' ? '表示中の日' : S.view === 'week' ? '表示中の週' : '表示中の月'}の枠から選びます（目安 ${need}分。残りが足りない枠は薄く表示）${_candCtx ? ' <a href="#" onclick="openCandidates();return false">← 候補へ戻る</a>' : ''}</div>
+    ${rows.map(row).join('') || '<div class="empty">この期間に枠がありません</div>'}`);
 }
-function placeTask(taskId, blockId) { linkTask(taskId, blockId); closeModal(); renderAll(); showToast('配置しました'); }
+function placeTask(taskId, blockId) {
+  const back = _candCtx;
+  linkTask(taskId, blockId); closeModal(); renderAll();
+  showToast('配置しました');
+  if (back) openCandidates();   // 候補の一覧から来たときは、一覧に戻って、続けて入れられるようにする
+}
 
 // ───────── confirm week ─────────
 function confirmWeek() {
@@ -881,18 +875,11 @@ function loadSample() {
   // 今週の確定済み枠に、タスクを入れておく（振り返りで○×を試せる）
   const firstDone = blocks.find(b => b.status === 'confirmed' && b.date === today0 && b.startTime === '09:00') || blocks.find(b => b.status === 'confirmed');   // 今日の朝の枠に入れる（今日の振り返りで、タスクごとの○×を試せる）
   if (firstDone) { tasks[0].blockIds.push(firstDone.id); tasks[2].blockIds.push(firstDone.id); }
-  const monWork = blocks.find(b => b.status === 'draft' && b.date === nextMon && b.startTime === '09:00');
-  const tueWork = blocks.find(b => b.status === 'draft' && b.date === addDays(nextMon, 1) && b.startTime === '09:00');
-  const wedPm = blocks.find(b => b.status === 'draft' && b.date === addDays(nextMon, 2) && b.startTime === '14:00');
-  const pr = (kind, date, extra) => ({ id: uuid(), date, kind, status: 'pending', createdAt: new Date().toISOString(), ...extra });
-  const proposals = [
-    pr('link', nextMon, { taskId: tasks[1].id, blockId: monWork.id, reason: '期限まで3日。月曜の午前の枠が空いている（サンプルの理由）' }),
-    pr('link', addDays(nextMon, 1), { taskId: tasks[3].id, blockId: tueWork.id, reason: '大きいタスクなので、2時間の枠に単独で入れる（サンプルの理由）' }),
-    pr('move', addDays(nextMon, 2), { blockId: wedPm.id, toDate: addDays(nextMon, 2), toStart: '14:30', toEnd: '16:30', reason: '昼MTGのあとに余裕を持たせる（サンプルの理由）' }),
-  ];
-  applyData({ blocks, tasks, proposals, reviews: [], changes: [], blockTemplates: [{ id: uuid(), title: '作業時間', startTime: '09:00', endTime: '11:00', theme: '導入' }], themes: DEFAULT_THEMES.slice() });
+  // 優先順位（rank。1が最優先）。実際は、Claude（planner）がフェーズ一覧の順位から書く。サンプルでは、期限の順とあえて違う並びにして、「rank」が効くことが見えるようにする
+  tasks[3].rank = 1; tasks[1].rank = 2; tasks[4].rank = 3;   // 手順書の見直し → 見積の確認 → 機材の発注。rankが無いタスク（いつかやる整理）は、その後ろ
+  applyData({ blocks, tasks, proposals: [], reviews: [], changes: [], blockTemplates: [{ id: uuid(), title: '作業時間', startTime: '09:00', endTime: '11:00', theme: '導入' }], themes: DEFAULT_THEMES.slice() });
   lsSet('sched_sample', '1'); save(); S.cur = nextMon; S.view = 'week'; closeModal(); renderAll();
-  showToast('サンプルを入れました（来週に仮の予定があります）');
+  showToast('サンプルを入れました（右の候補に、タスクが優先順で並びます）');
 }
 function clearAllData() {
   if (!confirm('この端末の予定・タスク・候補・振り返りをすべて消します。よろしいですか？\n（クラウドのデータは消えません）')) return;
