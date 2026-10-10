@@ -109,6 +109,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 .cand-main .ttl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; font-size: 13px; }
 .cand.placed { background: #f6fbf7; border-radius: 6px; padding-left: 4px; padding-right: 4px; }
 .cand-when { margin: 3px 0 0 26px; display: flex; flex-wrap: wrap; gap: 4px; align-items: center; font-size: 11px; }
+.rest-tag { background: #fef3c7; color: #92400e; border-radius: 4px; padding: 0 5px; font-weight: 700; }
 .done-tag { background: #dcfce7; color: #166534; border-radius: 4px; padding: 0 5px; font-weight: 700; }
 .cand-when .when { background: #fff; border: 1px solid #bbf7d0; border-radius: 4px; padding: 0 5px; color: var(--text); text-decoration: none; }
 .cand-sub { font-size: 11px; color: var(--muted); margin: 2px 0 0 26px; }
@@ -207,7 +208,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 
 <script>
 'use strict';
-const APP_VERSION = 'v0.4.6';
+const APP_VERSION = 'v0.5.0';
 const GIST_FILE = 'schedule_data.json';
 const DAY_START = 6, DAY_END = 23;       // 表示する時間帯
 // 拡大レベル：1時間の高さ(px)と、ドラッグの刻み(分)。拡大するほど細かく動かせる（Shift押下中は5分）
@@ -317,9 +318,37 @@ const blockById = id => S.blocks.find(b => b.id === id);
 const taskById = id => S.tasks.find(t => t.id === id);
 const blockTasks = id => S.tasks.filter(t => (t.blockIds || []).includes(id));
 function blocksOn(ds) { return S.blocks.filter(b => isBlockOnDate(b, ds)).sort((a, b) => a.startTime.localeCompare(b.startTime)); }
+// ── 枠ごとに入れた分数（task.alloc[枠ID]）と、分割のルール ──
+// alloc が無い旧データ（まるごと入れた）は、見積ぜんぶを、その枠で使うものとして数える（従来どおり）
+const allocOf = (t, bid) => (t.alloc && typeof t.alloc[bid] === 'number') ? t.alloc[bid] : null;
+const taskUsage = (t, bid) => { const a = allocOf(t, bid); return a === null ? taskMin(t) : a; };
+function taskAllocated(t) {
+  const links = (t.blockIds || []).map(id => blockById(id)).filter(Boolean);
+  if (!links.length) return 0;
+  if (links.some(b => allocOf(t, b.id) === null)) return taskMin(t);      // 旧データ：すべて配置済みとみなす
+  return links.reduce((sum, b) => sum + allocOf(t, b.id), 0);
+}
+const taskRemaining = t => Math.max(0, taskMin(t) - taskAllocated(t));      // まだ枠に入れていない分（分）
+// 分けるときの、1回あたりの最小の分数。null＝分けない。分割が空欄のタスクは、NGと同じ扱い
+const SPLIT_MIN = { 'NG': null, '△': 60, '〇': 30 };
+// この枠に、このタスクを入れられるか。入れられるなら、入れる分数も返す。入れられないなら、理由を返す
+function placementFor(t, b) {
+  const need = taskRemaining(t);
+  const free = Math.max(blockStats(b).free, 0);
+  if ((t.blockIds || []).includes(b.id)) return { ok: false, reason: 'この枠には、入っています' };
+  if (need <= 0) return { ok: false, reason: 'すべて配置済みです' };
+  if (free >= need) return { ok: true, amt: need, split: false, rest: 0 };
+  const rule = t.split || 'NG';
+  const minPiece = SPLIT_MIN[rule] === undefined ? null : SPLIT_MIN[rule];
+  if (minPiece === null) return { ok: false, reason: `分割${t.split || '未設定（NG扱い）'}：残り${free}分で、必要${need}分に足りません` };
+  let amt = free;                                             // 分けて入れる：この枠に入れる分
+  if (need - amt < minPiece) amt = need - minPiece;           // 残りが細かくなりすぎるなら、この枠の分を減らす
+  if (amt < minPiece) return { ok: false, reason: `分割${rule}：${minPiece}分以上の空きが要ります（残り${free}分）` };
+  return { ok: true, amt, split: true, rest: need - amt };
+}
 function blockStats(b) {
   const ts = blockTasks(b.id);
-  const used = ts.reduce((s, t) => s + taskMin(t), 0);
+  const used = ts.reduce((sum, t) => sum + taskUsage(t, b.id), 0);
   return { total: ts.length, done: ts.filter(t => t.completed).length, used, free: (toMin(b.endTime) - toMin(b.startTime)) - used };
 }
 function effectiveTitle(b) { const ts = blockTasks(b.id); return ts.length ? ts.map(t => t.title).join('; ') : (b.title || '作業枠'); }
@@ -350,17 +379,20 @@ function deleteBlock(id) {
   const b = blockById(id);
   if (b) logChange(b, 'delete', snap(b), null);
   S.blocks = S.blocks.filter(x => x.id !== id);
-  S.tasks.forEach(t => { t.blockIds = (t.blockIds || []).filter(x => x !== id); });
+  S.tasks.forEach(t => { t.blockIds = (t.blockIds || []).filter(x => x !== id); if (t.alloc) delete t.alloc[id]; });
   S.proposals.forEach(p => { if (p.blockId === id && p.status === 'pending') p.status = 'dismissed'; });
   save();
 }
-function linkTask(taskId, blockId) {
+function linkTask(taskId, blockId, amt) {
   const t = taskById(taskId); if (!t) return;
-  if (!t.blockIds.includes(blockId)) { t.blockIds.push(blockId); logChange(blockById(blockId), 'link', null, { task: t.title }); save(); }
+  if (!t.blockIds.includes(blockId)) { t.blockIds.push(blockId); logChange(blockById(blockId), 'link', null, { task: t.title }); }
+  if (typeof amt === 'number') { t.alloc = t.alloc || {}; t.alloc[blockId] = amt; }     // この枠に入れた分数
+  save();
 }
 function unlinkTask(taskId, blockId) {
   const t = taskById(taskId); if (!t) return;
-  t.blockIds = t.blockIds.filter(x => x !== blockId); logChange(blockById(blockId), 'unlink', { task: t.title }, null); save();
+  t.blockIds = t.blockIds.filter(x => x !== blockId); if (t.alloc) delete t.alloc[blockId];
+  logChange(blockById(blockId), 'unlink', { task: t.title }, null); save();
 }
 
 // ───────── rendering: calendar ─────────
@@ -626,7 +658,7 @@ const taskBlocksOf = t => (t.blockIds || []).map(id => blockById(id)).filter(Boo
 const upcomingBlocksOf = t => taskBlocksOf(t).filter(b => b.date >= today() || b.recurrence).sort((a, b) => (a.date + a.startTime).localeCompare(b.date + b.startTime));
 const isPlaced = t => taskBlocksOf(t).length > 0;
 function rankedOpenTasks() {
-  const open = S.tasks.filter(t => !t.completed && (!isPlaced(t) || upcomingBlocksOf(t).length > 0));
+  const open = S.tasks.filter(t => !t.completed && (taskRemaining(t) > 0 || upcomingBlocksOf(t).length > 0));
   const rk = t => (typeof t.rank === 'number') ? t.rank : null;
   return open.sort((a, b) => {
     const ra = rk(a), rb = rk(b);
@@ -636,18 +668,18 @@ function rankedOpenTasks() {
     return taskScore(b).score - taskScore(a).score;
   });
 }
-const unplacedCount = list => list.filter(t => !isPlaced(t)).length;
+const unplacedCount = list => list.filter(t => taskRemaining(t) > 0).length;       // 未配置＝まだ入れていない分が残っているタスク
 function candidateRowsHtml(list, limit) {
   const shown = limit ? list.slice(0, limit) : list;
   return shown.map((t, i) => {
-    const placed = isPlaced(t);
-    const sub = [t.estimateH ? `見積 ${fmtH(t.estimateH)}` : (t.scale ? `見積 ${SCALE_LABEL[t.scale]}` : ''), t.split ? `分割${t.split}` : '', dueLabel(t)].filter(Boolean);
-    // 配置した日時（今日以降の枠）。押すと、その日の枠を開く
-    const when = placed ? upcomingBlocksOf(t).map(b => `<a class="when" href="#" onclick="gotoBlock('${b.id}');return false">${b.recurrence ? '毎週 ' : fmtMD(b.date) + ' '}${b.startTime}–${b.endTime}</a>`).join('') : '';
+    const placed = isPlaced(t), rem = taskRemaining(t);
+    const sub = [t.estimateH ? `見積 ${fmtH(t.estimateH)}` : (t.scale ? `見積 ${SCALE_LABEL[t.scale]}` : ''), t.split ? `分割${t.split}` : '分割 未設定', dueLabel(t)].filter(Boolean);
+    // 配置した日時（今日以降の枠）。押すと、その枠を開く。分けて入れたときは、枠ごとの分数も出す
+    const when = placed ? upcomingBlocksOf(t).map(b => `<a class="when" href="#" onclick="gotoBlock('${b.id}');return false">${b.recurrence ? '毎週 ' : fmtMD(b.date) + ' '}${b.startTime}–${b.endTime}${allocOf(t, b.id) !== null && ((t.blockIds || []).length > 1 || rem > 0) ? `（${allocOf(t, b.id)}分）` : ''}</a>`).join('') : '';
+    const btn = rem > 0 ? `<button class="btn btn-sm btn-primary" onclick="openPlace('${t.id}')">${placed ? '続きを配置' : '配置'}</button>` : '';
     return `<div class="cand ${placed ? 'placed' : ''}"><div class="cand-main"><span class="rankno">${i + 1}</span>${t.intent ? `<span class="intent i${t.intent === '◎' ? '1' : '2'}">${h(t.intent)}</span>` : ''}
-      <span class="ttl" title="${h(t.title)}" onclick="openTaskEdit('${t.id}')">${h(t.title)}</span>
-      <button class="btn btn-sm ${placed ? '' : 'btn-primary'}" onclick="openPlace('${t.id}')">${placed ? '追加' : '配置'}</button></div>
-      ${placed ? `<div class="cand-when"><span class="done-tag">配置済み</span>${when}</div>` : ''}
+      <span class="ttl" title="${h(t.title)}" onclick="openTaskEdit('${t.id}')">${h(t.title)}</span>${btn}</div>
+      ${placed ? `<div class="cand-when"><span class="done-tag">${rem > 0 ? '一部配置' : '配置済み'}</span>${when}${rem > 0 ? `<span class="rest-tag">あと${rem}分 未配置</span>` : ''}</div>` : ''}
       <div class="cand-sub ${dueOver(t) ? 'over' : ''}">${h(sub.join('　'))} <a href="#" onclick="openTaskEdit('${t.id}');return false">編集</a></div></div>`;
   }).join('') + (limit && list.length > limit ? `<div class="empty">他${list.length - limit}件（上の「候補」ボタンで、すべて見られます）</div>` : '');
 }
@@ -693,10 +725,10 @@ function taskScore(t) {
   return { score, why };
 }
 function suggestFor(b) {
-  const free = blockStats(b).free;
   return S.tasks.filter(t => !t.completed && !(t.blockIds || []).includes(b.id))
-    .map(t => ({ t, ...taskScore(t), min: taskMin(t) }))
-    .filter(x => x.min <= Math.max(free, 0))
+    .map(t => ({ t, ...taskScore(t), pf: placementFor(t, b) }))
+    .filter(x => x.pf.ok)
+    .map(x => ({ ...x, min: x.pf.amt }))
     .sort((a, b2) => b2.score - a.score || a.min - b2.min).slice(0, 5);
 }
 
@@ -729,10 +761,10 @@ function openBlock(id, date, start, end) {
 }
 function blockTasksSection(b, viewDate) {
   const ts = blockTasks(b.id), st = blockStats(b);
-  const unplaced = S.tasks.filter(t => !t.completed && !(t.blockIds || []).includes(b.id));
+  const unplaced = S.tasks.filter(t => !t.completed && !(t.blockIds || []).includes(b.id) && placementFor(t, b).ok);
   const sug = suggestFor(b);
   return `<div class="sect"><h4>この枠のタスク（${st.done}/${st.total}完了 ／ 見積${st.used}分 ／ 残${Math.max(st.free, 0)}分）</h4>
-    ${ts.map(t => `<div class="task-row"><input type="checkbox" ${t.completed ? 'checked' : ''} onchange="toggleTask('${t.id}')"><span class="ttl">${h(t.title)}</span><span class="meta">${estLabel(t)}</span><button class="btn btn-sm" onclick="unlinkFromModal('${t.id}')">外す</button></div>`).join('') || '<div class="empty">まだありません</div>'}
+    ${ts.map(t => `<div class="task-row"><input type="checkbox" ${t.completed ? 'checked' : ''} onchange="toggleTask('${t.id}')"><span class="ttl">${h(t.title)}</span><span class="meta">${allocOf(t, b.id) !== null ? allocOf(t, b.id) + '分' : estLabel(t)}</span><button class="btn btn-sm" onclick="unlinkFromModal('${t.id}')">外す</button></div>`).join('') || '<div class="empty">まだありません</div>'}
     <div class="row" style="margin-top:6px"><select id="bm-addtask"><option value="">タスクを追加…</option>${unplaced.map(t => `<option value="${t.id}">${h(t.title)}</option>`).join('')}</select>
     <button class="btn btn-sm" onclick="addTaskFromModal()">追加</button></div></div>
     <div class="sect"><h4>おすすめ（期限・優先度・残り時間から）</h4>
@@ -760,8 +792,8 @@ function saveBlockModal() {
 function removeBlock() { if (!confirm('この作業枠を削除します（繰り返しの場合は全ての発生日が消えます）。よろしいですか？')) return; deleteBlock(_bm.id); closeModal(); renderAll(); }
 function toggleTask(id) { const t = taskById(id); if (!t) return; t.completed = !t.completed; t.completedAt = t.completed ? new Date().toISOString() : null; save(); renderAll(); reopenBlock(); }
 function unlinkFromModal(taskId) { unlinkTask(taskId, _bm.id); renderAll(); reopenBlock(); }
-function addTaskFromModal() { const v = document.getElementById('bm-addtask').value; if (!v) return; linkTask(v, _bm.id); renderAll(); reopenBlock(); }
-function linkFromSuggest(taskId) { linkTask(taskId, _bm.id); renderAll(); reopenBlock(); }
+function addTaskFromModal() { const v = document.getElementById('bm-addtask').value; if (!v) return; if (!placeInBlock(v, _bm.id)) return; renderAll(); reopenBlock(); }
+function linkFromSuggest(taskId) { if (!placeInBlock(taskId, _bm.id)) return; renderAll(); reopenBlock(); }
 function reopenBlock() { if (_bm && _bm.id) openBlock(_bm.id, _bm.viewDate); }
 
 // ───────── task edit modal（追加・編集・削除）─────────
@@ -811,27 +843,39 @@ function deleteTaskFromEdit() {
 // 「◀ 前の週」「次の週 ▶」で、ほかの週の枠にも切り替えられる（来週の枠に入れるため）。今日より前の日の枠は、並べない。
 function openPlace(taskId, ws) {
   const t = taskById(taskId); if (!t) return;
-  const need = taskMin(t);
+  const need = taskRemaining(t);
+  const rule = t.split || 'NG';
   const auto = !ws;                         // 週を指定せず開いたとき：枠がある、最初の週まで進める（今日が土曜で、今週の枠が残っていない場合など）
   ws = ws || (S.view === 'month' ? weekStart(today()) : weekStart(S.cur));
   const weekRows = w => {
     const r = [];
-    Array.from({ length: 7 }, (_, i) => addDays(w, i)).filter(ds => ds >= today()).forEach(ds => blocksOn(ds).forEach(b => r.push({ ds, b, free: Math.max(blockStats(b).free, 0) })));
+    Array.from({ length: 7 }, (_, i) => addDays(w, i)).filter(ds => ds >= today()).forEach(ds => blocksOn(ds).forEach(b => r.push({ ds, b, free: Math.max(blockStats(b).free, 0), pf: placementFor(t, b) })));
     return r;
   };
   let rows = weekRows(ws);
   for (let k = 0; auto && !rows.length && k < 8; k++) { ws = addDays(ws, 7); rows = weekRows(ws); }
-  // 残りが足りない枠は、文字だけを薄くする。「入れる」ボタンは、いつも濃いまま（薄いと、押せないように見えるため）
-  const row = ({ ds, b, free }) => `<div class="task-row"><span class="ttl" style="${free < need ? 'opacity:.6' : ''}">${fmtMD(ds)} ${b.startTime}–${b.endTime} ${h(b.title || '作業枠')}${isDraft(b) ? '（仮）' : ''}</span><span class="meta ${free < need ? 'over' : ''}">残${free}分${free < need ? '（足りない）' : ''}</span><button class="btn btn-sm btn-primary" onclick="placeTask('${t.id}','${b.id}')">入れる</button></div>`;
+  // 入れられない枠は、文字を薄くして、ボタンを押せなくし、理由を出す。入れられる枠は、入れる分数をボタンに出す
+  const row = ({ ds, b, free, pf }) => `<div class="task-row"><span class="ttl" style="${pf.ok ? '' : 'opacity:.55'}">${fmtMD(ds)} ${b.startTime}–${b.endTime} ${h(b.title || '作業枠')}${isDraft(b) ? '（仮）' : ''}</span>
+    <span class="meta ${pf.ok ? '' : 'over'}">${pf.ok ? `残${free}分${pf.split ? `（分けて${pf.amt}分。あと${pf.rest}分）` : ''}` : h(pf.reason)}</span>
+    <button class="btn btn-sm btn-primary" ${pf.ok ? '' : 'disabled'} onclick="placeTask('${t.id}','${b.id}')">入れる${pf.ok ? `（${pf.amt}分）` : ''}</button></div>`;
   openModal(`<h3>「${h(t.title)}」を、どの枠に入れますか？<button class="btn btn-sm" onclick="closeModal()">✕</button></h3>
     <div class="row" style="justify-content:space-between;margin-bottom:6px"><button class="btn btn-sm" onclick="openPlace('${t.id}','${addDays(ws, -7)}')">◀ 前の週</button><b>${fmtMD(ws)}〜${fmtMD(addDays(ws, 6))}</b><button class="btn btn-sm" onclick="openPlace('${t.id}','${addDays(ws, 7)}')">次の週 ▶</button></div>
-    <div class="empty" style="margin-bottom:6px">必要な時間の目安：${need}分。残りが足りない枠も、入れられます（文字が薄く、「足りない」と出ます。ボタンは、そのまま押せます）。${_candCtx ? ' <a href="#" onclick="openCandidates();return false">← 候補へ戻る</a>' : ''}</div>
-    ${rows.map(row).join('') || '<div class="empty">この週に、選べる枠がありません（今日より前の日は出しません）。「次の週 ▶」で、ほかの週を見られます</div>'}`);
+    <div class="empty" style="margin-bottom:6px">まだ入れていない分：${need}分／分割：${t.split || '未設定（NGと同じ）'}（NG＝分けない、△＝分けるなら60分以上、〇＝30分以上）。入れられない枠は、ボタンが押せません。${_candCtx ? ' <a href="#" onclick="openCandidates();return false">← 候補へ戻る</a>' : ''}</div>
+    ${need <= 0 ? '<div class="empty">すべて配置済みです。見積を増やすと、続きを入れられます（候補の「編集」から）。</div>' : (rows.map(row).join('') || '<div class="empty">この週に、選べる枠がありません（今日より前の日は出しません）。「次の週 ▶」で、ほかの週を見られます</div>')}`);
+}
+// 分割のルールを確かめて、入れる。入れられないときは、理由を出して、何もしない
+function placeInBlock(taskId, blockId) {
+  const t = taskById(taskId), b = blockById(blockId); if (!t || !b) return null;
+  const r = placementFor(t, b);
+  if (!r.ok) { showToast(r.reason); return null; }
+  linkTask(taskId, blockId, r.amt);
+  return r;
 }
 function placeTask(taskId, blockId) {
   const back = _candCtx;
-  linkTask(taskId, blockId); closeModal(); renderAll();
-  showToast('配置しました');
+  const r = placeInBlock(taskId, blockId); if (!r) return;
+  closeModal(); renderAll();
+  showToast(r.split ? `${r.amt}分を入れました（あと${r.rest}分が、未配置です）` : '配置しました');
   if (back) openCandidates();   // 候補の一覧から来たときは、一覧に戻って、続けて入れられるようにする
 }
 
