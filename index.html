@@ -80,6 +80,9 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 .blk.tiny .t { font-size: 10px; }
 .blk.tiny .tm, .blk.tiny .tag, .blk.tiny .grip { display: none; }
 .blk.tiny .resize { height: 3px; }
+.blk .fillb { position: absolute; right: 3px; bottom: 6px; font-size: 10px; font-weight: 700; background: #16a34a; color: #fff; border-radius: 3px; padding: 0 5px; pointer-events: none; z-index: 2; line-height: 1.5; }
+.blk .fillb.over { background: #dc2626; }
+.blk.tiny .fillb { display: none; }
 .blk .tag { position: absolute; top: 1px; right: 14px; font-size: 9px; background: #fff; border: 1px solid var(--warn); color: var(--warn); border-radius: 3px; padding: 0 3px; cursor: pointer; }
 .blk .tag:hover { background: var(--warn); color: #fff; }
 .blk .grip { position: absolute; top: 0; right: 0; width: 14px; height: 14px; font-size: 10px; text-align: center; cursor: grab; touch-action: none; color: var(--muted); }
@@ -208,7 +211,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 
 <script>
 'use strict';
-const APP_VERSION = 'v0.5.0';
+const APP_VERSION = 'v0.5.1';
 const GIST_FILE = 'schedule_data.json';
 const DAY_START = 6, DAY_END = 23;       // 表示する時間帯
 // 拡大レベル：1時間の高さ(px)と、ドラッグの刻み(分)。拡大するほど細かく動かせる（Shift押下中は5分）
@@ -337,6 +340,7 @@ function placementFor(t, b) {
   const free = Math.max(blockStats(b).free, 0);
   if ((t.blockIds || []).includes(b.id)) return { ok: false, reason: 'この枠には、入っています' };
   if (need <= 0) return { ok: false, reason: 'すべて配置済みです' };
+  if (free <= 0) return { ok: false, reason: 'この枠は、いっぱいです（残り0分）' };
   if (free >= need) return { ok: true, amt: need, split: false, rest: 0 };
   const rule = t.split || 'NG';
   const minPiece = SPLIT_MIN[rule] === undefined ? null : SPLIT_MIN[rule];
@@ -345,6 +349,13 @@ function placementFor(t, b) {
   if (need - amt < minPiece) amt = need - minPiece;           // 残りが細かくなりすぎるなら、この枠の分を減らす
   if (amt < minPiece) return { ok: false, reason: `分割${rule}：${minPiece}分以上の空きが要ります（残り${free}分）` };
   return { ok: true, amt, split: true, rest: need - amt };
+}
+// 枠の残り時間の目印：タスクで埋まって残り0なら「満」、見積が枠を超えていたら「超◯」。タスクが入っていない枠には出さない
+function fillBadge(st) {
+  if (!st.total) return '';
+  if (st.free === 0) return '<span class="fillb" title="残り時間は0分です（いっぱい）">満</span>';
+  if (st.free < 0) return `<span class="fillb over" title="見積が、枠を${-st.free}分超えています">超${-st.free}</span>`;
+  return '';
 }
 function blockStats(b) {
   const ts = blockTasks(b.id);
@@ -501,8 +512,8 @@ function renderGrid(con, days) {
       const sizeCls = height < 20 ? 'tiny' : height < 34 ? 'short' : '';
       html += `<div class="blk ${themeClass(b.theme)} ${isDraft(b) ? 'draft' : ''} ${sizeCls}" data-id="${b.id}" data-date="${ds}"
         style="top:${top}px;height:${height}px;left:calc(${lane*w}% + 1px);width:calc(${w}% - 3px)">
-        ${isDraft(b) ? '<span class="tag" data-tag="1" title="押すと、この枠だけ確定にします">仮</span>' : ''}<span class="grip" title="ドラッグで移動">⠿</span>
-        <div class="t">${h(b.title || '作業枠')}</div><div class="tm">${b.startTime}–${b.endTime}${st.total ? ` ・${st.done}/${st.total}` : ''}</div>
+        ${isDraft(b) ? '<span class="tag" data-tag="1" title="押すと、この枠だけ確定にします">仮</span>' : ''}<span class="grip" title="ドラッグで移動">⠿</span>${fillBadge(st)}
+        <div class="t">${h(b.title || '作業枠')}</div><div class="tm">${b.startTime}–${b.endTime}${st.total ? ` ・${st.done}/${st.total}${st.free > 0 ? ` ・残${st.free}分` : ''}` : ''}</div>
         ${(days.length === 1 || height > 56) && height >= 40 ? ts.slice(0, 5).map(t => `<div class="tk ${t.completed ? 'done' : ''}">${h(t.title)}</div>`).join('') : ''}
         <div class="resize"></div></div>`;
     });
@@ -763,7 +774,7 @@ function blockTasksSection(b, viewDate) {
   const ts = blockTasks(b.id), st = blockStats(b);
   const unplaced = S.tasks.filter(t => !t.completed && !(t.blockIds || []).includes(b.id) && placementFor(t, b).ok);
   const sug = suggestFor(b);
-  return `<div class="sect"><h4>この枠のタスク（${st.done}/${st.total}完了 ／ 見積${st.used}分 ／ 残${Math.max(st.free, 0)}分）</h4>
+  return `<div class="sect"><h4>この枠のタスク（${st.done}/${st.total}完了 ／ 見積${st.used}分 ／ ${st.free === 0 && st.total ? '残0分（いっぱい）' : st.free < 0 ? `<b style="color:var(--danger)">${-st.free}分超過</b>` : `残${st.free}分`}）</h4>
     ${ts.map(t => `<div class="task-row"><input type="checkbox" ${t.completed ? 'checked' : ''} onchange="toggleTask('${t.id}')"><span class="ttl">${h(t.title)}</span><span class="meta">${allocOf(t, b.id) !== null ? allocOf(t, b.id) + '分' : estLabel(t)}</span><button class="btn btn-sm" onclick="unlinkFromModal('${t.id}')">外す</button></div>`).join('') || '<div class="empty">まだありません</div>'}
     <div class="row" style="margin-top:6px"><select id="bm-addtask"><option value="">タスクを追加…</option>${unplaced.map(t => `<option value="${t.id}">${h(t.title)}</option>`).join('')}</select>
     <button class="btn btn-sm" onclick="addTaskFromModal()">追加</button></div></div>
