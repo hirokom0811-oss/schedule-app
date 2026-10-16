@@ -82,6 +82,9 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 .blk.tiny .resize { height: 3px; }
 .blk .fillb { position: absolute; right: 3px; bottom: 6px; font-size: 10px; font-weight: 700; background: #16a34a; color: #fff; border-radius: 3px; padding: 0 5px; pointer-events: none; z-index: 2; line-height: 1.5; }
 .blk .fillb.over { background: #dc2626; }
+.blk .rvb { position: absolute; left: 3px; bottom: 6px; font-size: 11px; font-weight: 700; background: #fff; border: 1px solid var(--border); border-radius: 3px; padding: 0 4px; pointer-events: none; z-index: 2; line-height: 1.4; letter-spacing: 1px; }
+.blk .rvb .rv-good { color: #16a34a; } .blk .rvb .rv-partial { color: #d97706; } .blk .rvb .rv-bad { color: #dc2626; }
+.blk.tiny .rvb { display: none; }
 .blk.tiny .fillb { display: none; }
 .blk .tag { position: absolute; top: 1px; right: 14px; font-size: 9px; background: #fff; border: 1px solid var(--warn); color: var(--warn); border-radius: 3px; padding: 0 3px; cursor: pointer; }
 .blk .tag:hover { background: var(--warn); color: #fff; }
@@ -215,7 +218,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 
 <script>
 'use strict';
-const APP_VERSION = 'v0.8.1';
+const APP_VERSION = 'v0.9.0';
 const GIST_FILE = 'schedule_data.json';
 const DAY_START = 6, DAY_END = 23;       // 表示する時間帯
 // 拡大レベル：1時間の高さ(px)と、ドラッグの刻み(分)。拡大するほど細かく動かせる（Shift押下中は5分）
@@ -379,6 +382,15 @@ function placementOptions(t, b) {
   return [...set].filter(a => a >= 1 && a <= free && a <= need && (a === need || (minPiece !== null && a >= minPiece && need - a >= minPiece))).sort((x, y) => x - y);
 }
 // 枠の残り時間の目印：タスクで埋まって残り0なら「満」、見積が枠を超えていたら「超◯」。タスクが入っていない枠には出さない
+// 振り返りの結果の目印：その日の振り返りで、この枠の項目に付けた ○△×。コメントは、ホバー（長押し）の説明に出す
+function reviewBadge(b, ds) {
+  const r = S.reviews.find(x => x.date === ds); if (!r) return '';
+  const its = (r.items || []).filter(it => it.blockId === b.id && it.result);
+  if (!its.length) return '';
+  const mark = { good: '○', partial: '△', bad: '×' };
+  const tip = its.map(it => `${mark[it.result]} ${it.title}${it.comment ? '：' + it.comment : ''}`).join(' / ');
+  return `<span class="rvb" title="${h(tip)}">${its.map(it => `<span class="rv-${it.result}">${mark[it.result]}</span>`).join('')}</span>`;
+}
 function fillBadge(st) {
   if (!st.total) return '';
   if (st.free === 0) return '<span class="fillb" title="残り時間は0分です（いっぱい）">満</span>';
@@ -542,7 +554,7 @@ function renderGrid(con, days) {
       const sizeCls = height < 20 ? 'tiny' : height < 34 ? 'short' : '';
       html += `<div class="blk ${themeClass(b.theme)} ${kindOf(b) === 'private' ? 'priv' : ''} ${isDraft(b) ? 'draft' : ''} ${sizeCls}" data-id="${b.id}" data-date="${ds}"
         style="top:${top}px;height:${height}px;left:calc(${lane*w}% + 1px);width:calc(${w}% - 3px)">
-        ${isDraft(b) ? '<span class="tag" data-tag="1" title="押すと、この枠だけ確定にします">仮</span>' : ''}<span class="grip" title="ドラッグで移動">⠿</span>${fillBadge(st)}
+        ${isDraft(b) ? '<span class="tag" data-tag="1" title="押すと、この枠だけ確定にします">仮</span>' : ''}<span class="grip" title="ドラッグで移動">⠿</span>${fillBadge(st)}${reviewBadge(b, ds)}
         <div class="t">${h(b.title || '作業枠')}</div><div class="tm">${b.startTime}–${b.endTime}${st.total ? ` ・${st.done}/${st.total}${st.free > 0 ? ` ・残${st.free}分` : ''}` : ''}</div>
         ${(days.length === 1 || height > 56) && height >= 40 ? ts.slice(0, 5).map(t => `<div class="tk ${t.completed ? 'done' : ''}">${h(t.title)}</div>`).join('') : ''}
         <div class="resize"></div></div>`;
