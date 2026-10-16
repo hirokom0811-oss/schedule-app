@@ -218,7 +218,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 
 <script>
 'use strict';
-const APP_VERSION = 'v0.9.0';
+const APP_VERSION = 'v0.9.1';
 const GIST_FILE = 'schedule_data.json';
 const DAY_START = 6, DAY_END = 23;       // 表示する時間帯
 // 拡大レベル：1時間の高さ(px)と、ドラッグの刻み(分)。拡大するほど細かく動かせる（Shift押下中は5分）
@@ -383,7 +383,9 @@ function placementOptions(t, b) {
 }
 // 枠の残り時間の目印：タスクで埋まって残り0なら「満」、見積が枠を超えていたら「超◯」。タスクが入っていない枠には出さない
 // 振り返りの結果の目印：その日の振り返りで、この枠の項目に付けた ○△×。コメントは、ホバー（長押し）の説明に出す
+const showReviewMarks = () => lsGet('sched_show_review') !== '0';   // 設定で切り替える（この端末だけ。初期は表示）
 function reviewBadge(b, ds) {
+  if (!showReviewMarks()) return '';
   const r = S.reviews.find(x => x.date === ds); if (!r) return '';
   const its = (r.items || []).filter(it => it.blockId === b.id && it.result);
   if (!its.length) return '';
@@ -1094,6 +1096,7 @@ function openSettings() {
   const tok = lsGet('sched_gist_token') || '', gid = lsGet('sched_gist_id') || '';
   openModal(`<h3>設定<button class="btn btn-sm" onclick="closeModal()">✕</button></h3>
     <div class="empty" style="margin-bottom:6px">バージョン：${APP_VERSION}（スマホ幅ではタイトル横に出ないので、ここで確認）</div>
+    <div class="row" style="margin-bottom:6px"><label style="width:auto"><input type="checkbox" ${showReviewMarks() ? 'checked' : ''} onchange="setShowReview(this.checked)"> 振り返りの結果（○△×）を、枠に表示する</label></div>
     <div class="sect" style="border:0;margin:0;padding:0"><h4>クラウド同期（GitHub Gist・このアプリ専用）</h4>
       <div class="row"><label>トークン</label><input type="password" id="st-token" value="${h(tok)}" placeholder="gist権限のトークン"></div>
       <div class="row"><label>Gist ID</label><input id="st-gid" value="${h(gid)}" placeholder="空欄で保存すると新規作成"></div>
@@ -1110,6 +1113,7 @@ function openSettings() {
     <div class="sect"><h4>最近の変更（確定済みの予定のみ記録）</h4>
       ${S.changes.slice(-8).reverse().map(c => `<div class="empty">${c.at.slice(5, 16).replace('T', ' ')} ${h(c.title || '')} ${c.kind}${c.before && c.after && c.before.startTime ? `：${c.before.date} ${c.before.startTime}→${c.after.date} ${c.after.startTime}` : ''}</div>`).join('') || '<div class="empty">まだありません</div>'}</div>`);
 }
+function setShowReview(on) { lsSet('sched_show_review', on ? '1' : '0'); renderAll(); showToast(on ? '振り返りの結果を表示します' : '振り返りの結果を隠します'); }
 function saveGistSettings() {
   const t = document.getElementById('st-token').value.trim(), g = document.getElementById('st-gid').value.trim();
   if (t) lsSet('sched_gist_token', t); if (g) lsSet('sched_gist_id', g);
