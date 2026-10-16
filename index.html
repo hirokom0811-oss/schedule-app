@@ -215,7 +215,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 
 <script>
 'use strict';
-const APP_VERSION = 'v0.7.2';
+const APP_VERSION = 'v0.8.0';
 const GIST_FILE = 'schedule_data.json';
 const DAY_START = 6, DAY_END = 23;       // 表示する時間帯
 // 拡大レベル：1時間の高さ(px)と、ドラッグの刻み(分)。拡大するほど細かく動かせる（Shift押下中は5分）
@@ -346,8 +346,15 @@ const taskRemaining = t => Math.max(0, taskMin(t) - taskAllocated(t));      // �
 // 分けるときの、1回あたりの最小の分数。null＝分けない。分割が空欄のタスクは、NGと同じ扱い
 const SPLIT_MIN = { 'NG': null, '△': 60, '〇': 30 };
 // この枠に、このタスクを入れられるか。入れられるなら、入れる分数も返す。入れられないなら、理由を返す
-function placementFor(t, b) {
+// want（分）を渡すと、その分数で入れられるかを調べる。分割のルールの範囲外なら、入れられない
+function placementFor(t, b, want) {
   const need = taskRemaining(t);
+  if (want !== undefined) {
+    const base = placementFor(t, b);
+    if (!base.ok) return base;
+    if (!placementOptions(t, b).includes(want)) return { ok: false, reason: `${want}分では入れられません（分割${t.split || '未設定（NG扱い）'}のルールの範囲外です）` };
+    return { ok: true, amt: want, split: want < need, rest: need - want };
+  }
   const free = Math.max(blockStats(b).free, 0);
   if (kindOf(t) !== kindOf(b)) return { ok: false, reason: kindOf(t) === 'private' ? 'プライベートのタスクは、プライベートの枠にだけ入れられます' : '仕事のタスクは、プライベートの枠には入れられません' };
   if ((t.blockIds || []).includes(b.id)) return { ok: false, reason: 'この枠には、入っています' };
@@ -361,6 +368,14 @@ function placementFor(t, b) {
   if (need - amt < minPiece) amt = need - minPiece;           // 残りが細かくなりすぎるなら、この枠の分を減らす
   if (amt < minPiece) return { ok: false, reason: `分割${rule}：${minPiece}分以上の空きが要ります（残り${free}分）` };
   return { ok: true, amt, split: true, rest: need - amt };
+}
+// この枠に入れられる分数の候補（15分刻み＋空きいっぱい＋全部）。分割のルール（最小の分数、残りが細かくなりすぎない）を満たすものだけ
+function placementOptions(t, b) {
+  const need = taskRemaining(t), free = Math.max(blockStats(b).free, 0);
+  const rule = t.split || 'NG', minPiece = SPLIT_MIN[rule] === undefined ? null : SPLIT_MIN[rule];
+  const top = Math.min(free, need), set = new Set([top, need]);
+  for (let a = 15; a <= top; a += 15) set.add(a);
+  return [...set].filter(a => a >= 1 && a <= free && a <= need && (a === need || (minPiece !== null && a >= minPiece && need - a >= minPiece))).sort((x, y) => x - y);
 }
 // 枠の残り時間の目印：タスクで埋まって残り0なら「満」、見積が枠を超えていたら「超◯」。タスクが入っていない枠には出さない
 function fillBadge(st) {
@@ -940,23 +955,25 @@ function openPlace(taskId, ws) {
   // 入れられない枠は、文字を薄くして、ボタンを押せなくし、理由を出す。入れられる枠は、入れる分数をボタンに出す
   const row = ({ ds, b, free, pf }) => `<div class="task-row"><span class="ttl" style="${pf.ok ? '' : 'opacity:.55'}">${fmtMD(ds)} ${b.startTime}–${b.endTime} ${h(b.title || '作業枠')}${isDraft(b) ? '（仮）' : ''}</span>
     <span class="meta ${pf.ok ? '' : 'over'}">${pf.ok ? `残${free}分${pf.split ? `（分けて${pf.amt}分。あと${pf.rest}分）` : ''}` : h(pf.reason)}</span>
-    <button class="btn btn-sm btn-primary" ${pf.ok ? '' : 'disabled'} onclick="placeTask('${t.id}','${b.id}')">入れる${pf.ok ? `（${pf.amt}分）` : ''}</button></div>`;
+    ${(() => { const o = pf.ok ? placementOptions(t, b) : []; return o.length > 1 ? `<select id="pa-${b.id}" class="btn btn-sm" title="入れる分数">${o.map(a => `<option value="${a}" ${a === pf.amt ? 'selected' : ''}>${a}分</option>`).join('')}</select>` : ''; })()}
+    <button class="btn btn-sm btn-primary" ${pf.ok ? '' : 'disabled'} onclick="placeTask('${t.id}','${b.id}')">入れる${pf.ok && placementOptions(t, b).length <= 1 ? `（${pf.amt}分）` : ''}</button></div>`;
   openModal(`<h3>「${h(t.title)}」を、どの枠に入れますか？<button class="btn btn-sm" onclick="closeModal()">✕</button></h3>
     <div class="row" style="justify-content:space-between;margin-bottom:6px"><button class="btn btn-sm" onclick="openPlace('${t.id}','${addDays(ws, -7)}')">◀ 前の週</button><b>${fmtMD(ws)}〜${fmtMD(addDays(ws, 6))}</b><button class="btn btn-sm" onclick="openPlace('${t.id}','${addDays(ws, 7)}')">次の週 ▶</button></div>
     <div class="empty" style="margin-bottom:6px">まだ入れていない分：${need}分／分割：${t.split || '未設定（NGと同じ）'}（NG＝分けない、△＝分けるなら60分以上、〇＝30分以上）。入れられない枠は、ボタンが押せません。${_candCtx ? ' <a href="#" onclick="openCandidates();return false">← 候補へ戻る</a>' : ''}</div>
     ${need <= 0 ? '<div class="empty">すべて配置済みです。見積を増やすと、続きを入れられます（候補の「編集」から）。</div>' : (rows.map(row).join('') || `<div class="empty">この週に、選べる枠がありません（今日より前の日は出しません）。「次の週 ▶」で、ほかの週を見られます${kindOf(t) === 'private' ? '。プライベートの枠は、カレンダーで枠を作り、区分を「プライベート」にします' : ''}</div>`)}`);
 }
 // 分割のルールを確かめて、入れる。入れられないときは、理由を出して、何もしない
-function placeInBlock(taskId, blockId) {
+function placeInBlock(taskId, blockId, want) {
   const t = taskById(taskId), b = blockById(blockId); if (!t || !b) return null;
-  const r = placementFor(t, b);
+  const r = placementFor(t, b, want);
   if (!r.ok) { showToast(r.reason); return null; }
   linkTask(taskId, blockId, r.amt);
   return r;
 }
 function placeTask(taskId, blockId) {
   const back = _candCtx;
-  const r = placeInBlock(taskId, blockId); if (!r) return;
+  const sel = document.getElementById('pa-' + blockId);
+  const r = placeInBlock(taskId, blockId, sel ? Number(sel.value) : undefined); if (!r) return;
   closeModal(); renderAll();
   showToast(r.split ? `${r.amt}分を入れました（あと${r.rest}分が、未配置です）` : '配置しました');
   if (back) openCandidates();   // 候補の一覧から来たときは、一覧に戻って、続けて入れられるようにする
