@@ -215,7 +215,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 
 <script>
 'use strict';
-const APP_VERSION = 'v0.7.1';
+const APP_VERSION = 'v0.7.2';
 const GIST_FILE = 'schedule_data.json';
 const DAY_START = 6, DAY_END = 23;       // 表示する時間帯
 // 拡大レベル：1時間の高さ(px)と、ドラッグの刻み(分)。拡大するほど細かく動かせる（Shift押下中は5分）
@@ -1063,6 +1063,7 @@ function exportIcs() {
 function openSettings() {
   const tok = lsGet('sched_gist_token') || '', gid = lsGet('sched_gist_id') || '';
   openModal(`<h3>設定<button class="btn btn-sm" onclick="closeModal()">✕</button></h3>
+    <div class="empty" style="margin-bottom:6px">バージョン：${APP_VERSION}（スマホ幅ではタイトル横に出ないので、ここで確認）</div>
     <div class="sect" style="border:0;margin:0;padding:0"><h4>クラウド同期（GitHub Gist・このアプリ専用）</h4>
       <div class="row"><label>トークン</label><input type="password" id="st-token" value="${h(tok)}" placeholder="gist権限のトークン"></div>
       <div class="row"><label>Gist ID</label><input id="st-gid" value="${h(gid)}" placeholder="空欄で保存すると新規作成"></div>
