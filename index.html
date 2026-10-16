@@ -215,7 +215,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 
 <script>
 'use strict';
-const APP_VERSION = 'v0.8.0';
+const APP_VERSION = 'v0.8.1';
 const GIST_FILE = 'schedule_data.json';
 const DAY_START = 6, DAY_END = 23;       // 表示する時間帯
 // 拡大レベル：1時間の高さ(px)と、ドラッグの刻み(分)。拡大するほど細かく動かせる（Shift押下中は5分）
@@ -358,6 +358,7 @@ function placementFor(t, b, want) {
   const free = Math.max(blockStats(b).free, 0);
   if (kindOf(t) !== kindOf(b)) return { ok: false, reason: kindOf(t) === 'private' ? 'プライベートのタスクは、プライベートの枠にだけ入れられます' : '仕事のタスクは、プライベートの枠には入れられません' };
   if ((t.blockIds || []).includes(b.id)) return { ok: false, reason: 'この枠には、入っています' };
+  if (!isDraft(b)) return { ok: false, reason: '確定した枠には、タスクを入れられません（枠の編集で「仮」に戻すと入れられます）' };
   if (need <= 0) return { ok: false, reason: 'すべて配置済みです' };
   if (free <= 0) return { ok: false, reason: 'この枠は、いっぱいです（残り0分）' };
   if (free >= need) return { ok: true, amt: need, split: false, rest: 0 };
