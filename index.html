@@ -215,7 +215,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 
 <script>
 'use strict';
-const APP_VERSION = 'v0.7.0';
+const APP_VERSION = 'v0.7.1';
 const GIST_FILE = 'schedule_data.json';
 const DAY_START = 6, DAY_END = 23;       // 表示する時間帯
 // 拡大レベル：1時間の高さ(px)と、ドラッグの刻み(分)。拡大するほど細かく動かせる（Shift押下中は5分）
@@ -574,8 +574,9 @@ function bindGrid() {
 // ── 長押しで持ち上げて動かす（指での操作）──
 // 短いタップは従来どおり編集画面。LONG_PRESS_MS 動かさずに押し続けると枠が持ち上がり、そのまま指で動かせる。
 // 押している間に指がLONG_PRESS_SLOP以上動いたら、スクロールとみなして持ち上げない。
-const LONG_PRESS_MS = 380, LONG_PRESS_SLOP = 8;
+const LONG_PRESS_MS = 550, LONG_PRESS_SLOP = 10;   // スクロールしようと指を置いて少し止まっただけで持ち上がらないよう、0.38秒→0.55秒
 let _lp = null;
+document.addEventListener('scroll', () => cancelLongPress(), true);   // 画面がスクロールし始めたら、長押しの待ちをやめる
 function armLongPress(e, el) {
   cancelLongPress();
   _lp = { el, id: e.pointerId, sx: e.clientX, sy: e.clientY, x: e.clientX, y: e.clientY, timer: setTimeout(liftBlock, LONG_PRESS_MS) };
