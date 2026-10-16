@@ -218,7 +218,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 
 <script>
 'use strict';
-const APP_VERSION = 'v0.9.1';
+const APP_VERSION = 'v0.9.2';
 const GIST_FILE = 'schedule_data.json';
 const DAY_START = 6, DAY_END = 23;       // 表示する時間帯
 // 拡大レベル：1時間の高さ(px)と、ドラッグの刻み(分)。拡大するほど細かく動かせる（Shift押下中は5分）
@@ -461,7 +461,12 @@ function updateTitle() {
   else if (S.view === 'week') { const s = weekStart(S.cur); t = `${fmtMD(s)} – ${fmtMD(addDays(s, 6))}`; }
   else t = `${S.cur.replace(/-/g, '/')}(${dowLabel(S.cur)})`;
   document.getElementById('cal-title').textContent = t;
-  document.getElementById('confirm-btn').textContent = VIEW_KIND === 'private' ? 'この週を確定（プライベート）' : 'この週を確定（仕事）';   // 確定は、いま選んでいる区分だけが対象
+  { // 確定は、いま選んでいる区分だけが対象。確定済みで、「仮」の枠も残っていない週は、押せなくする（仮の枠を足したら、また押せる）
+    const cb = document.getElementById('confirm-btn'), ws0 = weekStart(S.cur), kl0 = VIEW_KIND === 'private' ? 'プライベート' : '仕事';
+    const done = isWeekConfirmed(ws0) && !weekDrafts(ws0).length;
+    cb.disabled = done; cb.textContent = done ? `この週は確定済み（${kl0}）` : `この週を確定（${kl0}）`;
+    cb.title = done ? '確定を取り消すには、候補の欄の「確定を取り消す」を押します' : '';
+  }
   document.getElementById('confirm-btn').classList.toggle('hidden', S.view !== 'week');   // 確定は週ビューだけ（日ビューで押すと、その日だけでなく週全体が対象になり紛らわしいため）
   document.querySelector('.zoom-ctl').classList.toggle('hidden', S.view === 'month');   // 月ビューには時間の目盛りがないので、拡大・縮小は隠す
   document.getElementById('review-btn').classList.toggle('hidden', S.view !== 'day');
@@ -995,11 +1000,16 @@ function placeTask(taskId, blockId) {
 }
 
 // ───────── confirm week ─────────
-function confirmWeek() {
-  const ws = weekStart(S.cur), we = addDays(ws, 6);
+// その週（いまの区分）の「仮」の枠
+function weekDrafts(ws) {
+  const we = addDays(ws, 6);
   const targets = S.blocks.filter(b => kindOf(b) === VIEW_KIND && isDraft(b) && !b.recurrence && b.date >= ws && b.date <= we);
   const recur = S.blocks.filter(b => kindOf(b) === VIEW_KIND && isDraft(b) && b.recurrence && Array.from({length: 7}, (_, i) => addDays(ws, i)).some(ds => isBlockOnDate(b, ds)));
-  const all = [...targets, ...recur];
+  return [...targets, ...recur];
+}
+function confirmWeek() {
+  const ws = weekStart(S.cur), we = addDays(ws, 6);
+  const all = weekDrafts(ws);
   const cand = rankedOpenTasks(), un = unplacedCount(cand);
   const kl = `【${KIND_LABEL[VIEW_KIND]}】`;
   if (!all.length && isWeekConfirmed(ws)) { showToast(`この週の${KIND_LABEL[VIEW_KIND]}は、確定済みです`); return; }
