@@ -154,6 +154,20 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 .rv-btns button.sel-good { background: #dcfce7; border-color: var(--ok); }
 .rv-btns button.sel-partial { background: #fef3c7; border-color: var(--warn); }
 .rv-btns button.sel-bad { background: #fee2e2; border-color: var(--danger); }
+.rv-done { margin: 6px 0 4px; font-size: 12px; }
+.rv-done .lbl { color: #6b7280; margin-bottom: 2px; }
+.rv-list { max-height: 190px; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; background: #fff; }
+.rv-opt { display: flex; align-items: center; gap: 8px; padding: 6px 8px; font-size: 13px; cursor: pointer; border-bottom: 1px solid var(--border); }
+.rv-opt:last-child { border-bottom: 0; }
+.rv-opt input { flex: none; width: 16px; height: 16px; margin: 0; }
+.rv-opt { flex-wrap: wrap; }
+.rv-opt .ttl { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rv-opt .rankno.none { visibility: hidden; }
+.rv-meta { flex: none; display: flex; gap: 6px; align-items: center; font-size: 11px; color: #6b7280; white-space: nowrap; }
+.rv-meta .over { color: var(--danger); font-weight: 600; }
+.rv-opt.on { background: #dbeafe; }
+.rv-sel { color: #6b7280; margin-top: 2px; }
+.rv-relinked { background: #f3f4f6; border-radius: 6px; padding: 5px 8px; }
 #toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); background: #111827; color: #fff; padding: 8px 14px; border-radius: 8px; z-index: 200; display: none; font-size: 13px; }
 
 @media (max-width: 900px) {
@@ -177,6 +191,9 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
   .blk .tag { font-size: 11px; padding: 3px 9px; right: 32px; top: 2px; }   /* 指で押せる大きさ */
   .grid-body.multi .blk .tag { display: none; }   /* 列が狭い週ビューでは「仮」ラベルを隠す（斜線で見分ける）。日ビューでは出す */
   .rv-btns button { width: 52px; height: 40px; }
+  .rv-opt { padding: 10px 8px; }
+  .rv-opt input { width: 20px; height: 20px; }
+  .rv-meta { flex-basis: 100%; padding-left: 28px; }   /* 幅が狭いときは、見積・期限を2行目に回す */
   .btn-sm { padding: 6px 10px; }
 }
 @media (max-width: 640px) {
@@ -218,7 +235,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 
 <script>
 'use strict';
-const APP_VERSION = 'v0.9.4';
+const APP_VERSION = 'v0.9.5';
 const GIST_FILE = 'schedule_data.json';
 const DAY_START = 6, DAY_END = 23;       // 表示する時間帯
 // 拡大レベル：1時間の高さ(px)と、ドラッグの刻み(分)。拡大するほど細かく動かせる（Shift押下中は5分）
@@ -1038,26 +1055,94 @@ function openReview() {
   items.forEach(it => {
     const prev = existing && existing.items.find(x => x.blockId === it.blockId && x.taskId === it.taskId);
     it.result = prev ? prev.result : null; it.comment = prev ? prev.comment || '' : '';
+    it.done = prev && prev.doneTaskIds ? prev.doneTaskIds.slice() : [];
     if (!prev && it.taskId && taskById(it.taskId)?.completed) it.result = 'good';
   });
+  // 付け替え済みの項目：枠のいまのタスクからは作れない（元のタスクは枠から外れている）ので、保存済みの記録から足す
+  if (existing) existing.items.filter(x => x.relinked && blockById(x.blockId) && isBlockOnDate(blockById(x.blockId), ds) && !items.some(i => i.blockId === x.blockId && i.taskId === x.taskId)).forEach(x => {
+    const b = blockById(x.blockId);
+    items.push({ blockId: x.blockId, taskId: x.taskId, title: x.title, slot: `${b.startTime}–${b.endTime}`, result: x.result, comment: x.comment || '', done: (x.doneTaskIds || []).slice(), relinked: { ...x.relinked, addedIds: (x.relinked.addedIds || []).slice() }, undo: false });
+  });
+  items.sort((a, b) => a.slot.localeCompare(b.slot));
   _rv = { date: ds, items, memo: existing ? existing.memo || '' : '' };
   renderReview();
 }
+// ×の項目で「実際にやったこと」に選べるタスク：その日の週が対象の、仕事のタスク（完了済みも含む）。元のタスクと、すでにその枠にあるタスクは除く
+function reviewChoices(it) {
+  const ws = weekStart(_rv.date), inBlock = new Set(blockTasks(it.blockId).map(t => t.id));
+  return sortRanked(S.tasks.filter(t => kindOf(t) === 'work' && t.week === ws && t.id !== it.taskId && !inBlock.has(t.id)));
+}
+// 選択肢の1行：順位・意思・タスク名／見積・期限・配置済みの印（幅が狭いときは、後ろの3つが2行目）
+function reviewOptHtml(t) {
+  const est = t.estimateH ? fmtH(t.estimateH) : (t.scale ? SCALE_LABEL[t.scale] : '');
+  const meta = [est ? `<span>${h(est)}</span>` : '', t.dueDate ? `<span class="${dueOver(t) ? 'over' : ''}">${fmtMD(t.dueDate)}</span>` : '',
+    isPlaced(t) ? '<span class="done-tag">配置済み</span>' : ''].join('');
+  return `<span class="rankno ${typeof t.rank === 'number' ? '' : 'none'}">${typeof t.rank === 'number' ? t.rank : ''}</span>${t.intent ? `<span class="intent i${t.intent === '◎' ? '1' : '2'}">${h(t.intent)}</span>` : ''}`
+    + `<span class="ttl">${t.completed ? '✓ ' : ''}${h(t.title)}</span>${meta ? `<span class="rv-meta">${meta}</span>` : ''}`;
+}
+function reviewDoneHtml(it, i) {
+  if (it.relinked) {
+    const names = (it.relinked.addedIds || []).map(id => taskById(id)?.title || '（削除済み）');
+    return `<div class="rv-done rv-relinked">${it.undo ? '保存すると、元のタスクに戻します' : '付け替え済み → ' + h(names.join('、') || '（追加なし）')}
+      <button class="btn btn-sm" onclick="toggleUndo(${i})">${it.undo ? '戻すのをやめる' : '付け替えを戻す'}</button></div>`;
+  }
+  if (it.result !== 'bad') return '';
+  const cs = reviewChoices(it);
+  return `<div class="rv-done"><div class="lbl">実際にやったこと（保存すると、この枠のタスクを付け替えます）</div>${cs.length
+    ? `<div class="rv-list">${cs.map(t => `<label class="rv-opt ${it.done.includes(t.id) ? 'on' : ''}" title="${h(t.title)}"><input type="checkbox" ${it.done.includes(t.id) ? 'checked' : ''} onchange="toggleDone(${i},'${t.id}',this)">${reviewOptHtml(t)}</label>`).join('')}</div><div class="rv-sel" id="rv-sel-${i}">${it.done.length}件選択中</div>`
+    : '<div class="empty">この週の候補がありません（タスクの「対象の週」が、この週のものを出します）</div>'}</div>`;
+}
+// 一覧のスクロール位置を保つため、全体は描き直さず、その行だけ更新する
+function toggleDone(i, id, el) {
+  const it = _rv.items[i]; const k = it.done.indexOf(id); if (k >= 0) it.done.splice(k, 1); else it.done.push(id);
+  if (el) { el.closest('.rv-opt').classList.toggle('on', k < 0); const s = document.getElementById('rv-sel-' + i); if (s) s.textContent = `${it.done.length}件選択中`; }
+}
+function toggleUndo(i) { const it = _rv.items[i]; it.undo = !it.undo; renderReview(); }
 function renderReview() {
   const r = _rv;
   openModal(`<h3>${fmtMD(r.date)} の振り返り<button class="btn btn-sm" onclick="closeModal()">✕</button></h3>
     ${r.items.map((it, i) => `<div class="rv-item"><div class="rt">${it.slot} ${h(it.title)}</div>
       <div class="rv-btns">${[['good', '○'], ['partial', '△'], ['bad', '×']].map(([v, l]) => `<button class="btn ${it.result === v ? 'sel-' + v : ''}" onclick="setResult(${i},'${v}')">${l}</button>`).join('')}</div>
-      <input style="width:100%;padding:5px 7px;border:1px solid var(--border);border-radius:6px;font:inherit" placeholder="理由・実際にやったこと" value="${h(it.comment)}" oninput="_rv.items[${i}].comment=this.value"></div>`).join('') || '<div class="empty">この日の振り返り対象（テーマ付きの予定）がありません</div>'}
+      <input style="width:100%;padding:5px 7px;border:1px solid var(--border);border-radius:6px;font:inherit" placeholder="理由・実際にやったこと" value="${h(it.comment)}" oninput="_rv.items[${i}].comment=this.value">${reviewDoneHtml(it, i)}</div>`).join('') || '<div class="empty">この日の振り返り対象（テーマ付きの予定）がありません</div>'}
     <div class="row"><label>一言</label><input value="${h(r.memo)}" oninput="_rv.memo=this.value"></div>
     <div class="foot"><span class="spacer"></span><button class="btn" onclick="closeModal()">キャンセル</button><button class="btn btn-primary" onclick="saveReview()">保存</button></div>`);
 }
 function setResult(i, v) { const it = _rv.items[i]; it.result = it.result === v ? null : v; renderReview(); }
+// 保存時に、×の項目で選んだ「実際にやったこと」を枠に反映する（元のタスクは枠から外して候補に戻す）。
+// 実績の訂正なので、確定済みの枠・見積超過・分割のルールは見ない（placementFor を通さない）。戻せるよう、元の分数を relinked に残す
+function applyRelinks(r) {
+  let moved = 0, restored = 0;
+  r.items.forEach(it => {
+    const b = blockById(it.blockId); if (!b) return;
+    const inB = id => { const t = taskById(id); return !!t && (t.blockIds || []).includes(b.id); };
+    if (it.relinked && it.undo) {                                             // 付け替えを戻す
+      (it.relinked.addedIds || []).forEach(id => { if (inB(id)) unlinkTask(id, b.id); });
+      if (it.taskId && taskById(it.taskId) && !inB(it.taskId)) linkTask(it.taskId, b.id, typeof it.relinked.fromAlloc === 'number' ? it.relinked.fromAlloc : undefined);
+      it.relinked = null; it.undo = false; it.done = []; restored++;
+    } else if (!it.relinked && it.result === 'bad' && it.done.length) {
+      const from = it.taskId ? taskById(it.taskId) : null;
+      const fromAlloc = from ? allocOf(from, b.id) : null;
+      const total = from ? taskUsage(from, b.id) : (toMin(b.endTime) - toMin(b.startTime));
+      const targets = it.done.filter(id => taskById(id) && !inB(id));
+      if (!targets.length) { it.done = []; return; }
+      const share = Math.max(5, Math.round(total / targets.length / 5) * 5);
+      if (from && inB(from.id)) unlinkTask(from.id, b.id);
+      targets.forEach(id => linkTask(id, b.id, share));
+      it.relinked = { fromAlloc, addedIds: targets }; it.done = targets.slice(); moved++;
+    }
+  });
+  // 戻したあと、枠から外れたタスクの項目は残さない
+  r.items = r.items.filter(it => it.relinked || !it.taskId || blockTasks(it.blockId).some(t => t.id === it.taskId));
+  return { moved, restored };
+}
 function saveReview() {
-  const r = _rv; const rec = { id: uuid(), date: r.date, items: r.items.map(({ blockId, taskId, title, result, comment }) => ({ blockId, taskId, title, result, comment })), memo: r.memo, createdAt: new Date().toISOString() };
+  const r = _rv; const res = applyRelinks(r);
+  const rec = { id: uuid(), date: r.date, items: r.items.map(it => ({ blockId: it.blockId, taskId: it.taskId, title: it.title, result: it.result, comment: it.comment,
+    doneTaskIds: (it.result === 'bad' || it.relinked) ? it.done : [], relinked: it.relinked || null })), memo: r.memo, createdAt: new Date().toISOString() };
   const i = S.reviews.findIndex(x => x.date === r.date);
   if (i >= 0) { rec.id = S.reviews[i].id; S.reviews[i] = rec; } else S.reviews.push(rec);
-  save(); closeModal(); showToast('振り返りを保存しました');
+  save(); closeModal(); renderAll();
+  showToast('振り返りを保存しました' + (res.moved ? `（${res.moved}件、枠のタスクを付け替えました）` : '') + (res.restored ? `（${res.restored}件、元に戻しました）` : ''));
 }
 
 // ───────── ICS ─────────
