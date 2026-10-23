@@ -124,6 +124,20 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 .cand-when .when { background: #fff; border: 1px solid #bbf7d0; border-radius: 4px; padding: 0 5px; color: var(--text); text-decoration: none; }
 .cand-sub { font-size: 11px; color: var(--muted); margin: 2px 0 0 26px; }
 .cand-sub.over { color: var(--danger); }
+.cand.parent { background: #f8fafc; border-radius: 6px; padding-left: 4px; padding-right: 4px; }
+.cand.child { margin-left: 18px; border-left: 3px solid var(--primary-soft); padding-left: 6px; }
+.cand.child .cand-sub, .cand.child .cand-when { margin-left: 0; }
+.parent-tag { flex: none; font-size: 10px; font-weight: 700; color: var(--primary); background: var(--primary-soft); border-radius: 4px; padding: 0 5px; }
+.dc-row { border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; margin-bottom: 6px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.dc-row input, .dc-row select { padding: 5px 7px; border: 1px solid var(--border); border-radius: 6px; font: inherit; }
+.dc-row .dc-t { flex: 1 1 100%; }
+.dc-row .dc-e { width: 84px; }
+.dc-have { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.rv-new { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.rv-new input { padding: 5px 7px; border: 1px solid var(--border); border-radius: 6px; font: inherit; min-width: 0; }
+.rv-new .n-t { flex: 1 1 140px; }
+.rv-new .n-e { width: 84px; }
+.rv-par { color: #6b7280; }
 .intent { flex: none; font-size: 12px; font-weight: 700; border-radius: 4px; padding: 0 5px; }
 .intent.i1 { background: #fee2e2; color: #b91c1c; }
 .intent.i2 { background: #ffedd5; color: #c2410c; }
@@ -235,7 +249,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 
 <script>
 'use strict';
-const APP_VERSION = 'v0.9.5';
+const APP_VERSION = 'v0.9.7';
 const GIST_FILE = 'schedule_data.json';
 const DAY_START = 6, DAY_END = 23;       // 表示する時間帯
 // 拡大レベル：1時間の高さ(px)と、ドラッグの刻み(分)。拡大するほど細かく動かせる（Shift押下中は5分）
@@ -351,6 +365,12 @@ const isDraft = b => b.status === 'draft';
 const blockById = id => S.blocks.find(b => b.id === id);
 const taskById = id => S.tasks.find(t => t.id === id);
 const blockTasks = id => S.tasks.filter(t => (t.blockIds || []).includes(id));
+// ── 親子（フェーズの分解）：子のタスクは parentId で親を指す。親は「まとめ」の行で、枠に入れるのは子（と、親子でない単独のタスク）だけ ──
+const childrenOf = t => S.tasks.filter(c => c.parentId === t.id);
+const isParent = t => S.tasks.some(c => c.parentId === t.id);
+const parentOf = t => t.parentId ? (taskById(t.parentId) || null) : null;       // 親が削除されて見つからないときは、単独のタスクとして扱う
+const isTopLevel = t => !parentOf(t);
+const leavesOf = list => list.flatMap(t => isParent(t) ? childrenOf(t).filter(isOpenCandidate) : [t]);   // 件数は、枠に入れられる単位（子・単独）で数える
 function blocksOn(ds) { return S.blocks.filter(b => isBlockOnDate(b, ds)).sort((a, b) => a.startTime.localeCompare(b.startTime)); }
 // ── 枠ごとに入れた分数（task.alloc[枠ID]）と、分割のルール ──
 // alloc が無い旧データ（まるごと入れた）は、見積ぜんぶを、その枠で使うものとして数える（従来どおり）
@@ -368,6 +388,7 @@ const SPLIT_MIN = { 'NG': null, '△': 60, '〇': 30 };
 // この枠に、このタスクを入れられるか。入れられるなら、入れる分数も返す。入れられないなら、理由を返す
 // want（分）を渡すと、その分数で入れられるかを調べる。分割のルールの範囲外なら、入れられない
 function placementFor(t, b, want) {
+  if (isParent(t)) return { ok: false, reason: '分解したタスクは、子のタスクを枠に入れてください' };
   const need = taskRemaining(t);
   if (want !== undefined) {
     const base = placementFor(t, b);
@@ -744,7 +765,11 @@ const cwList = (k = VIEW_KIND) => k === 'private' ? S.confirmedWeeksPrivate : S.
 const isWeekConfirmed = (ws, k = VIEW_KIND) => cwList(k).includes(ws);
 const _showWeeks = new Set();                                   // 確定した週の候補を、いまだけ表示している週（"区分:月曜の日付"）
 const weekHidden = (ws, k = VIEW_KIND) => isWeekConfirmed(ws, k) && !_showWeeks.has(k + ':' + ws);
-const isOpenCandidate = t => !t.completed && (taskRemaining(t) > 0 || upcomingBlocksOf(t).length > 0);
+// 親は、未完了の子が1つでもあれば残す。子は、通常のタスクと同じ判定
+function isOpenCandidate(t) {
+  if (isParent(t)) return childrenOf(t).some(isOpenCandidate);
+  return !t.completed && (taskRemaining(t) > 0 || upcomingBlocksOf(t).length > 0);
+}
 function sortRanked(list) {
   const rk = t => (typeof t.rank === 'number') ? t.rank : null;
   return list.sort((a, b) => {
@@ -756,24 +781,40 @@ function sortRanked(list) {
   });
 }
 // 区分（仕事／プライベート）で絞る。既定は、いま選んでいる区分
-function rankedOpenTasks(k = VIEW_KIND) { const ws = viewWeek(); return sortRanked(S.tasks.filter(t => kindOf(t) === k && t.week === ws && isOpenCandidate(t))); }
-function undatedOpenTasks(k = VIEW_KIND) { return sortRanked(S.tasks.filter(t => kindOf(t) === k && !t.week && isOpenCandidate(t))); }
-const unplacedCount = list => list.filter(t => taskRemaining(t) > 0).length;       // 未配置＝まだ入れていない分が残っているタスク
+// 子は、親の行の下に出す（週・区分は、親に従う）ので、ここでは並べない
+function rankedOpenTasks(k = VIEW_KIND) { const ws = viewWeek(); return sortRanked(S.tasks.filter(t => isTopLevel(t) && kindOf(t) === k && t.week === ws && isOpenCandidate(t))); }
+function undatedOpenTasks(k = VIEW_KIND) { return sortRanked(S.tasks.filter(t => isTopLevel(t) && kindOf(t) === k && !t.week && isOpenCandidate(t))); }
+const unplacedCount = list => leavesOf(list).filter(t => taskRemaining(t) > 0).length;       // 未配置＝まだ入れていない分が残っているタスク（親は数えず、子を数える）
+// 親の行（まとめ）：枠には入れない。子の件数・完了・合計見積を出す。「分解」で子を足せる
+function parentRowHtml(t, i, noRank) {
+  const kids = childrenOf(t), done = kids.filter(c => c.completed).length, total = kids.reduce((s, c) => s + taskMin(c), 0);
+  const sub = [`子${kids.length}件・完了${done}/${kids.length}`, `合計 ${fmtH(total / 60)}`, dueLabel(t)].filter(Boolean);
+  return `<div class="cand parent"><div class="cand-main">${noRank ? '' : `<span class="rankno">${i + 1}</span>`}${t.intent ? `<span class="intent i${t.intent === '◎' ? '1' : '2'}">${h(t.intent)}</span>` : ''}
+    <span class="ttl" title="${h(t.title)}" onclick="openTaskEdit('${t.id}')">${h(t.title)}</span><span class="parent-tag">まとめ</span></div>
+    <div class="cand-sub ${dueOver(t) ? 'over' : ''}">${h(sub.join('　'))} <a href="#" onclick="openDecompose('${t.id}');return false">子を足す</a> <a href="#" onclick="openTaskEdit('${t.id}');return false">編集</a></div></div>`;
+}
 function candidateRowsHtml(list, limit, noRank) {
   const shown = limit ? list.slice(0, limit) : list;
-  return shown.map((t, i) => {
+  return shown.map((t, i) => isParent(t)
+    ? parentRowHtml(t, i, noRank) + childrenOf(t).filter(isOpenCandidate).map(c => candRowHtml(c, 0, true, true)).join('')
+    : candRowHtml(t, i, noRank, false)).join('') + (limit && list.length > limit ? `<div class="empty">他${list.length - limit}件（上の「候補」ボタンで、すべて見られます）</div>` : '');
+}
+// 候補の1行（child＝親の下に字下げして出す子）
+function candRowHtml(t, i, noRank, child) {
+  {
     const placed = isPlaced(t), rem = taskRemaining(t);
+    const split = (!child && !t.completed && !placed) ? ` <a href="#" onclick="openDecompose('${t.id}');return false">分解</a>` : '';   // 子は、さらに分解しない（親子は2段まで）。配置済みは、先に枠から外す
     const sub = [t.estimateH ? `見積 ${fmtH(t.estimateH)}` : (t.scale ? `見積 ${SCALE_LABEL[t.scale]}` : ''), t.split ? `分割${t.split}` : '分割 未設定', dueLabel(t)].filter(Boolean);
     // 配置した日時（今日以降の枠）。押すと、その枠を開く。分けて入れたときは、枠ごとの分数も出す
     const when = placed ? upcomingBlocksOf(t).map(b => `<a class="when" href="#" onclick="gotoBlock('${b.id}');return false">${b.recurrence ? '毎週 ' : fmtMD(b.date) + ' '}${b.startTime}–${b.endTime}${allocOf(t, b.id) !== null && ((t.blockIds || []).length > 1 || rem > 0) ? `（${allocOf(t, b.id)}分）` : ''}</a>`).join('') : '';
     const btn = rem > 0 ? `<button class="btn btn-sm btn-primary" onclick="openPlace('${t.id}')">${placed ? '続きを配置' : '配置'}</button>` : '';
-    return `<div class="cand ${placed ? 'placed' : ''}"><div class="cand-main">${noRank ? '' : `<span class="rankno">${i + 1}</span>`}${t.intent ? `<span class="intent i${t.intent === '◎' ? '1' : '2'}">${h(t.intent)}</span>` : ''}
+    return `<div class="cand ${placed ? 'placed' : ''} ${child ? 'child' : ''}"><div class="cand-main">${noRank ? '' : `<span class="rankno">${i + 1}</span>`}${t.intent ? `<span class="intent i${t.intent === '◎' ? '1' : '2'}">${h(t.intent)}</span>` : ''}
       <span class="ttl" title="${h(t.title)}" onclick="openTaskEdit('${t.id}')">${h(t.title)}</span>${btn}</div>
       ${placed ? `<div class="cand-when"><span class="done-tag">${rem > 0 ? '一部配置' : '配置済み'}</span>${when}${rem > 0 ? `<span class="rest-tag">あと${rem}分 未配置</span>` : ''}</div>` : ''}
-      <div class="cand-sub ${dueOver(t) ? 'over' : ''}">${h(sub.join('　'))} <a href="#" onclick="openTaskEdit('${t.id}');return false">編集</a></div></div>`;
-  }).join('') + (limit && list.length > limit ? `<div class="empty">他${list.length - limit}件（上の「候補」ボタンで、すべて見られます）</div>` : '');
+      <div class="cand-sub ${dueOver(t) ? 'over' : ''}">${h(sub.join('　'))} <a href="#" onclick="openTaskEdit('${t.id}');return false">編集</a>${split}</div></div>`;
+  }
 }
-function countLabel(list) { const u = unplacedCount(list), pl = list.length - u; return `未配置${u}件` + (pl ? `・配置済み${pl}件` : ''); }
+function countLabel(list) { const u = unplacedCount(list), pl = leavesOf(list).length - u; return `未配置${u}件` + (pl ? `・配置済み${pl}件` : ''); }
 function gotoBlock(id) {
   const b = blockById(id); if (!b) return;
   closeModal();
@@ -849,7 +890,7 @@ function taskScore(t) {
   return { score, why };
 }
 function suggestFor(b) {
-  return S.tasks.filter(t => !t.completed && !(t.blockIds || []).includes(b.id))
+  return S.tasks.filter(t => !t.completed && !isParent(t) && !(t.blockIds || []).includes(b.id))
     .map(t => ({ t, ...taskScore(t), pf: placementFor(t, b) }))
     .filter(x => x.pf.ok)
     .map(x => ({ ...x, min: x.pf.amt }))
@@ -887,7 +928,7 @@ function openBlock(id, date, start, end) {
 }
 function blockTasksSection(b, viewDate) {
   const ts = blockTasks(b.id), st = blockStats(b);
-  const unplaced = S.tasks.filter(t => !t.completed && !(t.blockIds || []).includes(b.id) && placementFor(t, b).ok);
+  const unplaced = S.tasks.filter(t => !t.completed && !isParent(t) && !(t.blockIds || []).includes(b.id) && placementFor(t, b).ok);
   const sug = suggestFor(b);
   return `<div class="sect"><h4>この枠のタスク（${st.done}/${st.total}完了 ／ 見積${st.used}分 ／ ${st.free === 0 && st.total ? '残0分（いっぱい）' : st.free < 0 ? `<b style="color:var(--danger)">${-st.free}分超過</b>` : `残${st.free}分`}）</h4>
     ${ts.map(t => `<div class="task-row"><input type="checkbox" ${t.completed ? 'checked' : ''} onchange="toggleTask('${t.id}')"><span class="ttl">${h(t.title)}</span><span class="meta">${allocOf(t, b.id) !== null ? allocOf(t, b.id) + '分' : estLabel(t)}</span><button class="btn btn-sm" onclick="unlinkFromModal('${t.id}')">外す</button></div>`).join('') || '<div class="empty">まだありません</div>'}
@@ -934,6 +975,7 @@ function openTaskEdit(id) {
   if (!t) return;
   const sel = (val, opts) => opts.map(([v, l]) => `<option value="${v}" ${String(val || '') === v ? 'selected' : ''}>${l}</option>`).join('');
   openModal(`<h3>${id ? 'タスクを編集' : 'タスクを追加'}<button class="btn btn-sm" onclick="cancelTaskEdit()">✕</button></h3>
+    ${parentOf(t) ? `<div class="row"><label>親</label><span>${h(parentOf(t).title)}</span></div>` : ''}
     <div class="row"><label>名前</label><input id="te-title" value="${h(t.title)}" placeholder="例：資料の下書き"></div>
     <div class="row"><label>区分</label><select id="te-kind">${sel(kindOf(t), [['work', '仕事'], ['private', 'プライベート']])}</select><span class="empty">プライベートは、プライベートの枠にだけ入ります</span></div>
     <div class="row"><label>意思</label><select id="te-intent">${sel(t.intent, [['', '（なし）'], ['◎', '◎'], ['〇', '〇']])}</select></div>
@@ -969,9 +1011,157 @@ function saveTaskEdit() {
 }
 function deleteTaskFromEdit() {
   const t = taskById(_te); if (!t) return;
-  if (!confirm(`「${t.title}」を削除します（枠に入っている場合は、枠から外れます）。よろしいですか？`)) return;
+  const kids = childrenOf(t);
+  if (!confirm(`「${t.title}」を削除します（枠に入っている場合は、枠から外れます）。${kids.length ? `\n分解した子${kids.length}件は消さず、単独のタスクに戻します。` : ''}\nよろしいですか？`)) return;
+  kids.forEach(c => { delete c.parentId; });
   S.tasks = S.tasks.filter(x => x.id !== _te);
   save(); const back = _candCtx; closeModal(); renderAll(); showToast('削除しました');
+  if (back) openCandidates();
+}
+
+// ───────── 分解（フェーズを、子のタスクに分ける）─────────
+// 候補のタスク（親）の下に、子のタスクを作る。子は、親の週・区分・期限を引き継ぎ、意思・分割も親の値から始める（子ごとに直せる）。
+// 親は「まとめ」の行になり、枠に入れるのは子だけ。親がすでに枠に入っているときは、止める（外すと、入れた分数の記録が消えるため、先に外してもらう）
+let _dc = null;
+function openDecompose(parentId) {
+  const p = taskById(parentId); if (!p) return;
+  if (p.parentId) { showToast('子のタスクは、さらに分解できません'); return; }
+  if (taskBlocksOf(p).length) { showToast('先に、このタスクを枠から外してください（枠に入っているタスクは分解できません）'); return; }
+  const blank = () => ({ title: '', est: '', intent: p.intent || '', split: p.split || '' });
+  _dc = { parentId, rows: [blank(), blank(), blank()], blank, back: _candCtx };
+  renderDecompose();
+}
+function renderDecompose() {
+  const p = taskById(_dc.parentId), kids = childrenOf(p);
+  const sel = (val, opts) => opts.map(([v, l]) => `<option value="${v}" ${String(val || '') === v ? 'selected' : ''}>${l}</option>`).join('');
+  openModal(`<h3>「${h(p.title)}」を分解<button class="btn btn-sm" onclick="cancelDecompose()">✕</button></h3>
+    <div class="dc-have">${kids.length ? `すでにある子：${kids.map(c => h(c.title)).join('、')}（ここでは、追加分だけを入れます）` : '子のタスクを入れてください。空欄の行は、作りません。'}</div>
+    ${_dc.rows.map((r, i) => `<div class="dc-row"><input class="dc-t" placeholder="子の名前（例：下書き）" value="${h(r.title)}" oninput="_dc.rows[${i}].title=this.value">
+      <input class="dc-e" type="number" step="0.25" min="0" inputmode="decimal" placeholder="見積(h)" value="${h(r.est)}" oninput="_dc.rows[${i}].est=this.value">
+      <select onchange="_dc.rows[${i}].intent=this.value">${sel(r.intent, [['', '意思なし'], ['◎', '◎'], ['〇', '〇']])}</select>
+      <select onchange="_dc.rows[${i}].split=this.value">${sel(r.split, [['', '分割 未設定'], ['NG', 'NG'], ['△', '△'], ['〇', '〇']])}</select>
+      ${_dc.rows.length > 1 ? `<button class="btn btn-sm" onclick="removeDecomposeRow(${i})">削除</button>` : ''}</div>`).join('')}
+    <div class="row"><button class="btn btn-sm" onclick="addDecomposeRow()">＋行を追加</button><button class="btn btn-sm" onclick="suggestDecompose()" ${_dc.busy ? 'disabled' : ''}>${_dc.busy ? '案を作っています…' : 'AIで30分ずつの案を出す'}</button></div>
+    <div class="row"><span class="empty">案は、入力欄に入るだけです（送るのは、親の名前と見積の合計。キーは、設定で入れます）。見積と分割が空のときは、小（約15分）・分けない扱いで入ります</span></div>
+    <div class="foot"><span class="spacer"></span><button class="btn" onclick="cancelDecompose()">キャンセル</button><button class="btn btn-primary" onclick="saveDecompose()">子を追加</button></div>`);
+}
+function addDecomposeRow() { _dc.rows.push(_dc.blank()); renderDecompose(); }
+function removeDecomposeRow(i) { _dc.rows.splice(i, 1); renderDecompose(); }
+function cancelDecompose() { const back = _dc && _dc.back; _dc = null; if (back) openCandidates(); else closeModal(); }
+
+// ── AIで、分解の案を出す（無料のAPI：Gemini か Groq。使う先とキーは、この端末の設定にだけ保存。Gist・公開コードには入れない）──
+// 送るのは、親のタスク名と見積の合計だけ。送る前に、必ず確認を出す。返ってきた案は、入力欄に入るだけで、「子を追加」を押すまで作られない
+const AI_PROVIDERS = {
+  gemini: { label: 'Gemini（Google）', model: 'gemini-2.5-flash', note: '無料枠で送った内容は、Googleの製品改善に使われることがあります' },
+  groq: { label: 'Groq', model: 'llama-3.3-70b-versatile', note: '' }
+};
+const aiProvider = () => lsGet('sched_ai_provider') === 'groq' ? 'groq' : 'gemini';
+const aiKey = p => lsGet('sched_ai_key_' + p) || '';
+const aiModel = p => lsGet('sched_ai_model_' + p) || AI_PROVIDERS[p].model;
+function aiPrompt(p) {
+  const total = p.estimateH > 0 ? Math.round(p.estimateH * 60) : 0;
+  const n = total ? Math.min(12, Math.max(2, Math.round(total / 30))) : null;
+  return `あなたは、仕事のタスクを小さく分ける手伝いをします。
+次のタスクを、1つあたり約30分で終わる、具体的な作業に分けてください。
+タスク名：「${p.title}」
+${total ? `全体の見積：${total}分（分けた作業の合計が、これに近くなるようにしてください）\n` : ''}条件：
+- 件数は${n ? `${n}件前後` : '3〜6件'}
+- 各項目の title は、動詞で始まる短い日本語（20文字以内）
+- 各項目の minutes は、30を基本に、15〜60の範囲の5の倍数
+- タスク名から分からないことは、細かく決めつけず、一般的な手順にする
+出力は、次のJSONだけにしてください：{"items":[{"title":"作業の名前","minutes":30}]}`;
+}
+async function callAi(provider, prompt) {
+  const key = aiKey(provider), model = aiModel(provider);
+  const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 30000);
+  try {
+    const res = provider === 'gemini'
+      ? await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, { method: 'POST', signal: ctl.signal,
+          headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
+          body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: 'application/json', temperature: 0.4 } }) })
+      : await fetch('https://api.groq.com/openai/v1/chat/completions', { method: 'POST', signal: ctl.signal,
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
+          body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], response_format: { type: 'json_object' }, temperature: 0.4 }) });
+    if (!res.ok) { let m = ''; try { m = (await res.json()).error?.message || ''; } catch (_) {} throw new Error(`${res.status} ${m}`.trim().slice(0, 160)); }
+    const j = await res.json();
+    return (provider === 'gemini' ? (j.candidates?.[0]?.content?.parts || []).map(x => x.text || '').join('') : j.choices?.[0]?.message?.content) || '';
+  } finally { clearTimeout(timer); }
+}
+// 返ってきた文字列から、{title, minutes} の配列を取り出す（コードブロックの囲みは外す。タイトルが空の項目は捨てる）
+function parseAiItems(text) {
+  const s = String(text).trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+  const o = JSON.parse(s), arr = Array.isArray(o) ? o : o.items;
+  if (!Array.isArray(arr)) throw new Error('案の形式が読み取れませんでした');
+  return arr.map(x => ({ title: String(x && x.title || '').trim().slice(0, 60), minutes: Math.min(120, Math.max(15, Math.round((Number(x && x.minutes) || 30) / 5) * 5)) }))
+    .filter(x => x.title).slice(0, 12);
+}
+async function suggestDecompose() {
+  const d = _dc; if (!d || d.busy) return;
+  const p = taskById(d.parentId); if (!p) return;
+  const prov = aiProvider(), info = AI_PROVIDERS[prov];
+  if (!aiKey(prov)) { showToast('設定の「AIの提案」で、キーを入れてください'); return; }
+  if (/[^\x21-\x7E]/.test(aiKey(prov))) { showToast('保存されているキーに、半角の英数字・記号以外（全角文字・空白など）が混じっています。設定で、キーを消して入れ直してください'); return; }
+  if (!confirm(`「${p.title}」という名前${p.estimateH > 0 ? 'と見積の合計' : ''}を、外部のサービス（${info.label}）に送って、分け方の案をもらいます。\n${info.note ? info.note + '。\n' : ''}よろしいですか？`)) return;
+  d.busy = true; renderDecompose();
+  try {
+    const items = parseAiItems(await callAi(prov, aiPrompt(p)));
+    if (_dc !== d) return;                                                      // 待っている間に、画面を閉じた
+    if (!items.length) throw new Error('案が空でした');
+    d.rows = d.rows.filter(r => r.title.trim() || r.est);                      // 空の行は、案に置き換える。入力済みの行は残す
+    items.forEach(x => d.rows.push({ ...d.blank(), title: x.title, est: String(x.minutes / 60) }));
+    d.busy = false; renderDecompose();
+    showToast(`${items.length}件の案を入れました。内容を確認して、直してから「子を追加」を押してください`);
+  } catch (e) {
+    if (_dc !== d) return;
+    d.busy = false; renderDecompose();
+    console.error('AI提案のエラー', e);
+    const net = e instanceof TypeError || e.name === 'AbortError';
+    showToast(net ? `通信できませんでした［${e.name}：${String(e.message).slice(0, 100)}］（時間切れ、ネットワーク、キーの文字の誤り、またはこのサービスをブラウザから呼べない可能性があります）` : `案を作れませんでした：${e.message}`);
+  }
+}
+// 設定の「AIの提案」。使う先・キー・モデル名は、この端末のlocalStorageにだけ保存する
+function openAiSettingsHtml() {
+  const pv = aiProvider(), info = AI_PROVIDERS[pv];
+  return `<div class="sect"><h4>AIの提案（分解の案。この端末だけに保存）</h4>
+    <div class="row"><label>使う先</label><select onchange="setAiProvider(this.value)">${Object.entries(AI_PROVIDERS).map(([k, v]) => `<option value="${k}" ${k === pv ? 'selected' : ''}>${h(v.label)}</option>`).join('')}</select></div>
+    <div class="row"><label>キー</label><input type="password" id="ai-key" value="${h(aiKey(pv))}" placeholder="この端末だけに保存します"></div>
+    <div class="row"><label>モデル</label><input id="ai-model" value="${h(lsGet('sched_ai_model_' + pv) || '')}" placeholder="空欄で ${h(info.model)}"></div>
+    <div class="row"><button class="btn btn-sm" onclick="saveAiSettings()">保存</button><button class="btn btn-sm" onclick="clearAiKey()">キーを消す</button></div>
+    <div class="empty">キーは、クラウド（Gist）にも公開コードにも入りません。PCとスマホで、それぞれ入れます。送るのは、親のタスク名と見積の合計だけで、送る前に確認が出ます。${info.note ? '<b>' + h(info.note) + '。</b>' : ''}</div></div>`;
+}
+// 書いたあとに読み直して、本当に保存できたかを確かめる（ブラウザが保存を許していないと、書き込みは黙って失敗するため）
+function saveAiSettings() {
+  const pv = aiProvider(), key = document.getElementById('ai-key').value.trim(), model = document.getElementById('ai-model').value.trim();
+  // キーは、半角の英数字と記号だけ。全角や空白・改行が混じると、通信の前に失敗する（コピーのときに混ざりやすい）
+  if (/[^\x21-\x7E]/.test(key)) { showToast('キーに、半角の英数字・記号以外（全角文字、空白、改行）が混じっています。コピーし直してください'); return; }
+  if (/[^\x21-\x7E]/.test(model)) { showToast('モデル名に、半角の英数字・記号以外（全角文字、空白）が混じっています'); return; }
+  lsSet('sched_ai_key_' + pv, key); lsSet('sched_ai_model_' + pv, model);
+  if (lsGet('sched_ai_key_' + pv) !== key || lsGet('sched_ai_model_' + pv) !== model) {
+    showToast('このブラウザでは、設定を保存できません（Claudeアプリ内のプレビュー、シークレットウィンドウ、サイトデータの保存を止めている設定など）。ChromeやEdgeの通常のウィンドウで開いてください');
+    return;
+  }
+  showToast('保存しました');
+}
+function setAiProvider(v) {
+  lsSet('sched_ai_provider', v);
+  if (aiProvider() !== v) { showToast('このブラウザでは、設定を保存できません（ChromeやEdgeの通常のウィンドウで開いてください）'); return; }
+  openSettings();
+}
+function clearAiKey() { lsSet('sched_ai_key_' + aiProvider(), ''); openSettings(); showToast('キーを消しました'); }
+function saveDecompose() {
+  const p = taskById(_dc.parentId); if (!p) return;
+  const rows = _dc.rows.filter(r => r.title.trim());
+  if (!rows.length) { showToast('子の名前を、1つ以上入れてください'); return; }
+  const now = new Date().toISOString();
+  rows.forEach(r => {
+    const est = parseFloat(r.est);
+    S.tasks.push({ id: uuid(), title: r.title.trim(), completed: false, blockIds: [], parentId: p.id, createdAt: now,
+      priority: r.intent === '◎' ? 'high' : 'medium', intent: r.intent || null, estimateH: est > 0 ? est : null, split: r.split || null,
+      scale: est > 0 ? scaleFromMin(Math.round(est * 60)) : 'small', dueDate: p.dueDate || null, week: p.week || null,
+      ...(kindOf(p) === 'private' ? { kind: 'private' } : {}) });
+  });
+  const back = _dc.back; _dc = null;
+  save(); closeModal(); renderAll(); showToast(`子のタスクを${rows.length}件、追加しました`);
   if (back) openCandidates();
 }
 
@@ -1070,7 +1260,9 @@ function openReview() {
 // ×の項目で「実際にやったこと」に選べるタスク：その日の週が対象の、仕事のタスク（完了済みも含む）。元のタスクと、すでにその枠にあるタスクは除く
 function reviewChoices(it) {
   const ws = weekStart(_rv.date), inBlock = new Set(blockTasks(it.blockId).map(t => t.id));
-  return sortRanked(S.tasks.filter(t => kindOf(t) === 'work' && t.week === ws && t.id !== it.taskId && !inBlock.has(t.id)));
+  // 親（まとめ）は除く。子と単独のタスクだけ。子は、親の週に従う（子自身の week は見ない）
+  const wk = t => (parentOf(t) || t).week;
+  return sortRanked(S.tasks.filter(t => kindOf(parentOf(t) || t) === 'work' && wk(t) === ws && !isParent(t) && t.id !== it.taskId && !inBlock.has(t.id)));
 }
 // 選択肢の1行：順位・意思・タスク名／見積・期限・配置済みの印（幅が狭いときは、後ろの3つが2行目）
 function reviewOptHtml(t) {
@@ -1078,7 +1270,7 @@ function reviewOptHtml(t) {
   const meta = [est ? `<span>${h(est)}</span>` : '', t.dueDate ? `<span class="${dueOver(t) ? 'over' : ''}">${fmtMD(t.dueDate)}</span>` : '',
     isPlaced(t) ? '<span class="done-tag">配置済み</span>' : ''].join('');
   return `<span class="rankno ${typeof t.rank === 'number' ? '' : 'none'}">${typeof t.rank === 'number' ? t.rank : ''}</span>${t.intent ? `<span class="intent i${t.intent === '◎' ? '1' : '2'}">${h(t.intent)}</span>` : ''}`
-    + `<span class="ttl">${t.completed ? '✓ ' : ''}${h(t.title)}</span>${meta ? `<span class="rv-meta">${meta}</span>` : ''}`;
+    + `<span class="ttl">${t.completed ? '✓ ' : ''}${parentOf(t) ? `<span class="rv-par">${h(parentOf(t).title)} › </span>` : ''}${h(t.title)}</span>${meta ? `<span class="rv-meta">${meta}</span>` : ''}`;
 }
 function reviewDoneHtml(it, i) {
   if (it.relinked) {
@@ -1090,7 +1282,22 @@ function reviewDoneHtml(it, i) {
   const cs = reviewChoices(it);
   return `<div class="rv-done"><div class="lbl">実際にやったこと（保存すると、この枠のタスクを付け替えます）</div>${cs.length
     ? `<div class="rv-list">${cs.map(t => `<label class="rv-opt ${it.done.includes(t.id) ? 'on' : ''}" title="${h(t.title)}"><input type="checkbox" ${it.done.includes(t.id) ? 'checked' : ''} onchange="toggleDone(${i},'${t.id}',this)">${reviewOptHtml(t)}</label>`).join('')}</div><div class="rv-sel" id="rv-sel-${i}">${it.done.length}件選択中</div>`
-    : '<div class="empty">この週の候補がありません（タスクの「対象の週」が、この週のものを出します）</div>'}</div>`;
+    : '<div class="empty">この週の候補がありません（タスクの「対象の週」が、この週のものを出します）</div>'}
+    <div class="rv-new"><input class="n-t" placeholder="候補にないタスクを、新しく追加" value="${h(it.newTitle || '')}" oninput="_rv.items[${i}].newTitle=this.value">
+      <input class="n-e" type="number" step="0.25" min="0" inputmode="decimal" placeholder="見積(h)" value="${h(it.newEst || '')}" oninput="_rv.items[${i}].newEst=this.value">
+      <button class="btn btn-sm" onclick="addReviewTask(${i})">追加して選ぶ</button></div></div>`;
+}
+// 振り返りの中で、候補に無いタスクを新しく作り、そのまま「実際にやったこと」に選ぶ（その日の週・仕事の区分で作る）。
+// 作ったタスクは、振り返りを保存せずに閉じても残る
+function addReviewTask(i) {
+  const it = _rv.items[i], title = (it.newTitle || '').trim();
+  if (!title) { showToast('タスクの名前を入れてください'); return; }
+  const est = parseFloat(it.newEst);
+  const t = { id: uuid(), title, completed: false, blockIds: [], priority: 'medium', createdAt: new Date().toISOString(), week: weekStart(_rv.date),
+    estimateH: est > 0 ? est : null, scale: est > 0 ? scaleFromMin(Math.round(est * 60)) : 'small', split: null, intent: null, dueDate: null };
+  S.tasks.push(t); save(); renderAll();
+  it.done.push(t.id); it.newTitle = ''; it.newEst = '';
+  renderReview(); showToast('タスクを追加しました（選択済み）');
 }
 // 一覧のスクロール位置を保つため、全体は描き直さず、その行だけ更新する
 function toggleDone(i, id, el) {
@@ -1199,6 +1406,7 @@ function openSettings() {
       <div class="row"><label>Gist ID</label><input id="st-gid" value="${h(gid)}" placeholder="空欄で保存すると新規作成"></div>
       <div class="row"><button class="btn btn-sm" onclick="saveGistSettings()">設定を保存</button><button class="btn btn-sm btn-primary" onclick="gistPush()">☁ 保存（アップロード）</button><button class="btn btn-sm" onclick="gistPull()">☁ 読み込み</button></div>
       <div class="empty">データは ${GIST_FILE} に保存します。旧TODOアプリのGist（todo_app_data.json）とは別のGistです。</div></div>
+    ${openAiSettingsHtml()}
     <div class="sect"><h4>テーマ（カンマ区切り）</h4><div class="row"><input id="st-themes" value="${h(S.themes.join(','))}"><button class="btn btn-sm" onclick="saveThemes()">保存</button></div></div>
     <div class="sect"><h4>作業枠テンプレート</h4>
       ${S.blockTemplates.map(t => `<div class="task-row"><span class="ttl">${h(t.title)} ${t.startTime}–${t.endTime} ${h(t.theme)}</span><button class="btn btn-sm" onclick="delTemplate('${t.id}')">削除</button></div>`).join('') || '<div class="empty">まだありません</div>'}
@@ -1262,6 +1470,10 @@ function loadSample() {
   [tasks[0], tasks[2]].forEach(t => { t.week = thisMon; });                    // 今週の枠に入っているタスク
   [tasks[1], tasks[3], tasks[4]].forEach(t => { t.week = nextMon; });        // 来週の候補（「いつかやる整理」は、あえて週の指定なし）
   tasks[3].rank = 1; tasks[1].rank = 2; tasks[4].rank = 3;   // 手順書の見直し → 見積の確認 → 機材の発注。rankが無いタスク（いつかやる整理）は、その後ろ
+  // 分解のサンプル（架空）：来週の候補に、親「新しい手順書づくり」（まとめ）と、その子3件
+  const parent = { id: uuid(), title: '新しい手順書づくり（サンプル）', priority: 'high', scale: 'large', estimateH: 3, intent: '◎', split: '△', week: nextMon, rank: 4, completed: false, blockIds: [], createdAt: new Date().toISOString() };
+  tasks.push(parent, ...[['構成を決める', 0.5], ['下書きを書く', 1.5], ['見直して仕上げる', 1]].map(([title, estimateH]) =>
+    ({ id: uuid(), title: title + '（サンプル）', parentId: parent.id, priority: 'high', scale: 'medium', estimateH, intent: '◎', split: '△', week: nextMon, completed: false, blockIds: [], createdAt: new Date().toISOString() })));
   // プライベートのサンプル（架空）：来週の土曜に、プライベートの枠を1つ。タスク2件（候補の「プライベート」に出る）
   blocks.push(mk(addDays(nextMon, 5), '10:00', '12:00', '私用の時間（サンプル）', '', 'draft', { kind: 'private' }));
   tasks.push({ id: uuid(), title: '私用の用事A（サンプル）', priority: 'high', scale: 'medium', estimateH: 1, intent: '◎', split: 'NG', week: nextMon, kind: 'private', completed: false, blockIds: [], createdAt: new Date().toISOString() },
