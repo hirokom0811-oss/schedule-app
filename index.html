@@ -249,7 +249,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 
 <script>
 'use strict';
-const APP_VERSION = 'v0.9.7';
+const APP_VERSION = 'v0.9.8';
 const GIST_FILE = 'schedule_data.json';
 const DAY_START = 6, DAY_END = 23;       // 表示する時間帯
 // 拡大レベル：1時間の高さ(px)と、ドラッグの刻み(分)。拡大するほど細かく動かせる（Shift押下中は5分）
@@ -611,11 +611,18 @@ function renderGrid(con, days) {
     html += '</div>';
   });
   html += '</div></div>';
+  const oldWrap = document.getElementById('gbw');
+  const gridKey = `${days[0]}|${days.length}|${S.zoom}`;
+  const keepTop = oldWrap && renderGrid._key === gridKey ? oldWrap.scrollTop : null;   // 同じ表示のままの再描画（仮→確定など）では、スクロール位置を動かさない
+  renderGrid._key = gridKey;
   con.innerHTML = html;
   const wrap = document.getElementById('gbw');
-  const first = days.flatMap(ds => blocksOn(ds))[0];
-  const startH = first ? Math.max(DAY_START, Math.floor(toMin(first.startTime)/60) - 1) : Math.max(DAY_START, new Date().getHours() - 1);
-  wrap.scrollTop = (startH - DAY_START) * HH;
+  if (keepTop !== null) wrap.scrollTop = keepTop;
+  else {
+    const first = days.flatMap(ds => blocksOn(ds))[0];
+    const startH = first ? Math.max(DAY_START, Math.floor(toMin(first.startTime)/60) - 1) : Math.max(DAY_START, new Date().getHours() - 1);
+    wrap.scrollTop = (startH - DAY_START) * HH;
+  }
   bindGrid();
 }
 
@@ -858,7 +865,9 @@ function renderSide() {
   const ws = viewWeek(), open = rankedOpenTasks();
   const hidden = weekHidden(ws);
   document.getElementById('task-count').textContent = `${weekRangeLabel(ws)}　${hidden ? '確定済み' : countLabel(open)}`;
-  document.getElementById('tasks').innerHTML = candidatesPanelHtml(30);
+  const tk = document.getElementById('tasks'), tkTop = tk.scrollTop, tkPar = tk.parentElement, tkParTop = tkPar ? tkPar.scrollTop : 0;
+  tk.innerHTML = candidatesPanelHtml(30);
+  tk.scrollTop = tkTop; if (tkPar) tkPar.scrollTop = tkParTop;   // 再描画で候補の欄の位置が先頭に戻らないように
   const badge2 = document.getElementById('prop-badge2');
   const un = hidden ? 0 : unplacedCount(open);
   if (badge2) { badge2.textContent = un; badge2.classList.toggle('hidden', !un); }   // 件数は、この週の未配置だけ（確定した週は0）
