@@ -255,7 +255,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 
 <script>
 'use strict';
-const APP_VERSION = 'v0.10.0';
+const APP_VERSION = 'v0.10.1';
 const GIST_FILE = 'schedule_data.json';
 const DAY_START = 6, DAY_END = 23;       // 表示する時間帯
 // 拡大レベル：1時間の高さ(px)と、ドラッグの刻み(分)。拡大するほど細かく動かせる（Shift押下中は5分）
@@ -1595,7 +1595,9 @@ async function gistPush() {
     const res = await fetch(gid ? `https://api.github.com/gists/${gid}` : 'https://api.github.com/gists', { method: gid ? 'PATCH' : 'POST', headers: { Authorization: `token ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     if (!res.ok) throw new Error((await res.json()).message || res.status);
     const d = await res.json(); if (!gid) lsSet('sched_gist_id', d.id);
-    lsSet('sched_last_saved', d.updated_at || new Date().toISOString()); lsSet('sched_base_savedAt', pl.savedAt); lsSet('sched_loaded_at', new Date().toISOString());
+    let after = { updated_at: d.updated_at, version: d.history && d.history[0] && d.history[0].version };
+    try { after = await cloudInfo(token, d.id || gid); } catch (_) {}                   // PATCHの応答と、あとの確認（GET）で、更新時刻の値がずれることがあるため、同じ取り方で取り直す
+    markSynced(after, pl.savedAt);
     _dirty = false; hideBanner(); showLoadedAt(); showToast('☁ クラウドに保存しました');
   } catch (e) { showToast('エラー: ' + e.message); }
 }
@@ -1607,15 +1609,21 @@ async function cloudInfo(token, gid) {
   let raw = f.content;
   if (f.truncated) { const r = await fetch(f.raw_url); if (!r.ok) throw new Error('rawデータの取得に失敗'); raw = await r.text(); }
   let parsed = null; try { parsed = JSON.parse(raw); } catch (_) {}
-  return { updated_at: data.updated_at, savedAt: parsed && parsed.savedAt, parsed };
+  return { updated_at: data.updated_at, version: data.history && data.history[0] && data.history[0].version, savedAt: parsed && parsed.savedAt, parsed };
 }
 // この画面が最後に同期した内容より、クラウドが新しいか。savedAtとupdated_atの両方で見る（スクリプトがsavedAtを更新しない書き込みも拾うため）。
 // 一度も同期していない画面（目印が両方無い）は、クラウドにデータがあれば「新しい」扱い
 function isStale(info) {
-  const base = lsGet('sched_base_savedAt'), last = lsGet('sched_last_saved');
+  const base = lsGet('sched_base_savedAt'), last = lsGet('sched_last_saved'), ver = lsGet('sched_last_version');
+  if (ver && info.version) return info.version !== ver;                  // 最も確実：最後に同期した時点の版（Gistの履歴の先頭）から、変わっていれば誰かが書いた
   if (base && info.savedAt && info.savedAt > base) return true;
-  if (last && info.updated_at && info.updated_at > last) return true;
-  return !base && !last && !!info.savedAt;
+  if (!ver && last && info.updated_at && info.updated_at > last) return true;   // 版の記録が無い旧い端末だけ、更新時刻で見る
+  return !base && !ver && !last && !!info.savedAt;
+}
+// 同期した時点の目印を記録する（保存・読み込みのあと。保存の直後は、あとの確認と同じ取り方で取り直す）
+function markSynced(info, savedAt) {
+  lsSet('sched_last_saved', info.updated_at || new Date().toISOString()); lsSet('sched_last_version', info.version || '');
+  lsSet('sched_base_savedAt', savedAt || ''); lsSet('sched_loaded_at', new Date().toISOString());
 }
 async function gistPull(skipConfirm) {
   const token = lsGet('sched_gist_token'), gid = lsGet('sched_gist_id');
@@ -1626,7 +1634,7 @@ async function gistPull(skipConfirm) {
     const info = await cloudInfo(token, gid);
     if (!info.parsed) throw new Error('クラウドのデータを読めませんでした');
     applyData(info.parsed); lsSet('sched_sample', ''); save(); resetUndo();
-    lsSet('sched_last_saved', info.updated_at || new Date().toISOString()); lsSet('sched_base_savedAt', info.savedAt || ''); lsSet('sched_loaded_at', new Date().toISOString());
+    markSynced(info, info.savedAt);
     _dirty = false; hideBanner(); showLoadedAt(); closeModal(); renderAll(); showToast('☁ 読み込みました');
   } catch (e) { showToast('エラー: ' + e.message); }
 }
