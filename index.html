@@ -24,6 +24,7 @@ button { font: inherit; cursor: pointer; }
 header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 8px 12px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; position: sticky; top: 0; z-index: 20; }
 header h1 { font-size: 16px; margin: 0 8px 0 0; }
 .ver { font-size: 10px; color: var(--muted); margin-left: 4px; }
+.loaded-at { font-size: 11px; color: var(--muted); white-space: nowrap; }
 .btn { border: 1px solid var(--border); background: var(--surface); border-radius: 6px; padding: 5px 10px; color: var(--text); }
 .btn:hover { background: var(--bg); }
 .btn-primary { background: var(--primary); color: #fff; border-color: var(--primary); }
@@ -230,6 +231,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
     <button data-view="month" onclick="setView('month')">月</button>
   </div>
   <span class="zoom-ctl"><button class="btn" id="zoom-out" onclick="zoomBy(-1)" title="縮小">－</button><span class="lbl" id="zoom-lbl"></span><button class="btn" id="zoom-in" onclick="zoomBy(1)" title="拡大">＋</button></span>
+  <span class="loaded-at" id="loaded-at"></span>
   <span class="spacer"></span>
   <button class="btn" id="prop-btn" onclick="openCandidates()">候補<span class="badge hidden" id="prop-badge2">0</span></button>
   <button class="btn" id="confirm-btn" onclick="confirmWeek()">この週を確定</button>
@@ -249,7 +251,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 
 <script>
 'use strict';
-const APP_VERSION = 'v0.9.8';
+const APP_VERSION = 'v0.9.9';
 const GIST_FILE = 'schedule_data.json';
 const DAY_START = 6, DAY_END = 23;       // 表示する時間帯
 // 拡大レベル：1時間の高さ(px)と、ドラッグの刻み(分)。拡大するほど細かく動かせる（Shift押下中は5分）
@@ -343,13 +345,22 @@ function save() {
   for (const [prop, key] of Object.entries(KEYS)) lsSet(key, JSON.stringify(S[prop]));
   _dirty = true; showBanner();
 }
+let _stale = false;   // クラウドに、この画面より新しいデータがある（別の端末・スクリプトが更新）
 function showBanner() {
   const b = document.getElementById('sync-banner');
-  if (!lsGet('sched_gist_token') || !lsGet('sched_gist_id')) { b.style.display = 'none'; return; }
+  if (!lsGet('sched_gist_token') || !lsGet('sched_gist_id') || !(_dirty || _stale)) { b.style.display = 'none'; return; }
   b.style.display = 'flex';
-  b.innerHTML = `<span>💾 未保存の変更があります</span><button class="btn btn-sm btn-primary" onclick="gistPush()">☁ 今すぐ保存</button>`;
+  b.innerHTML = (_stale
+    ? `<span>⚠ 別の端末で更新されています${_dirty ? '（この画面の未保存の変更は、読み込むと消えます）' : ''}</span><button class="btn btn-sm btn-primary" onclick="gistPull()">☁ 再読込</button>`
+    : '') + (_dirty && !_stale ? `<span>💾 未保存の変更があります</span><button class="btn btn-sm btn-primary" onclick="gistPush()">☁ 今すぐ保存</button>` : '');
 }
-function hideBanner() { document.getElementById('sync-banner').style.display = 'none'; }
+function hideBanner() { _stale = false; showBanner(); }
+function showLoadedAt() {
+  const el = document.getElementById('loaded-at'), t = lsGet('sched_loaded_at');
+  const d = t ? new Date(t) : null, p = n => String(n).padStart(2, '0');
+  el.textContent = d && !isNaN(d) ? `☁ 同期 ${d.getMonth() + 1}/${d.getDate()} ${p(d.getHours())}:${p(d.getMinutes())}` : '';
+  el.title = t ? 'この画面が、クラウドと最後に同期した時刻（読み込み・保存）。別の端末で更新したあとは、再読込してから編集してください' : '';
+}
 
 // ───────── block logic ─────────
 function isBlockOnDate(b, ds) {
@@ -1266,7 +1277,7 @@ function openReview() {
   _rv = { date: ds, items, memo: existing ? existing.memo || '' : '' };
   renderReview();
 }
-// ×の項目で「実際にやったこと」に選べるタスク：その日の週が対象の、仕事のタスク（完了済みも含む）。元のタスクと、すでにその枠にあるタスクは除く
+// ×の項目で「実際にやったタスク」に選べるタスク：その日の週が対象の、仕事のタスク（完了済みも含む）。元のタスクと、すでにその枠にあるタスクは除く
 function reviewChoices(it) {
   const ws = weekStart(_rv.date), inBlock = new Set(blockTasks(it.blockId).map(t => t.id));
   // 親（まとめ）は除く。子と単独のタスクだけ。子は、親の週に従う（子自身の week は見ない）
@@ -1289,14 +1300,14 @@ function reviewDoneHtml(it, i) {
   }
   if (it.result !== 'bad') return '';
   const cs = reviewChoices(it);
-  return `<div class="rv-done"><div class="lbl">実際にやったこと（保存すると、この枠のタスクを付け替えます）</div>${cs.length
+  return `<div class="rv-done"><div class="lbl">実際にやったタスク（保存すると、この枠のタスクを付け替えます）</div>${cs.length
     ? `<div class="rv-list">${cs.map(t => `<label class="rv-opt ${it.done.includes(t.id) ? 'on' : ''}" title="${h(t.title)}"><input type="checkbox" ${it.done.includes(t.id) ? 'checked' : ''} onchange="toggleDone(${i},'${t.id}',this)">${reviewOptHtml(t)}</label>`).join('')}</div><div class="rv-sel" id="rv-sel-${i}">${it.done.length}件選択中</div>`
     : '<div class="empty">この週の候補がありません（タスクの「対象の週」が、この週のものを出します）</div>'}
     <div class="rv-new"><input class="n-t" placeholder="候補にないタスクを、新しく追加" value="${h(it.newTitle || '')}" oninput="_rv.items[${i}].newTitle=this.value">
       <input class="n-e" type="number" step="0.25" min="0" inputmode="decimal" placeholder="見積(h)" value="${h(it.newEst || '')}" oninput="_rv.items[${i}].newEst=this.value">
       <button class="btn btn-sm" onclick="addReviewTask(${i})">追加して選ぶ</button></div></div>`;
 }
-// 振り返りの中で、候補に無いタスクを新しく作り、そのまま「実際にやったこと」に選ぶ（その日の週・仕事の区分で作る）。
+// 振り返りの中で、候補に無いタスクを新しく作り、そのまま「実際にやったタスク」に選ぶ（その日の週・仕事の区分で作る）。
 // 作ったタスクは、振り返りを保存せずに閉じても残る
 function addReviewTask(i) {
   const it = _rv.items[i], title = (it.newTitle || '').trim();
@@ -1319,12 +1330,12 @@ function renderReview() {
   openModal(`<h3>${fmtMD(r.date)} の振り返り<button class="btn btn-sm" onclick="closeModal()">✕</button></h3>
     ${r.items.map((it, i) => `<div class="rv-item"><div class="rt">${it.slot} ${h(it.title)}</div>
       <div class="rv-btns">${[['good', '○'], ['partial', '△'], ['bad', '×']].map(([v, l]) => `<button class="btn ${it.result === v ? 'sel-' + v : ''}" onclick="setResult(${i},'${v}')">${l}</button>`).join('')}</div>
-      <input style="width:100%;padding:5px 7px;border:1px solid var(--border);border-radius:6px;font:inherit" placeholder="理由・実際にやったこと" value="${h(it.comment)}" oninput="_rv.items[${i}].comment=this.value">${reviewDoneHtml(it, i)}</div>`).join('') || '<div class="empty">この日の振り返り対象（テーマ付きの予定）がありません</div>'}
+      <input style="width:100%;padding:5px 7px;border:1px solid var(--border);border-radius:6px;font:inherit" placeholder="理由" value="${h(it.comment)}" oninput="_rv.items[${i}].comment=this.value">${reviewDoneHtml(it, i)}</div>`).join('') || '<div class="empty">この日の振り返り対象（テーマ付きの予定）がありません</div>'}
     <div class="row"><label>一言</label><input value="${h(r.memo)}" oninput="_rv.memo=this.value"></div>
     <div class="foot"><span class="spacer"></span><button class="btn" onclick="closeModal()">キャンセル</button><button class="btn btn-primary" onclick="saveReview()">保存</button></div>`);
 }
 function setResult(i, v) { const it = _rv.items[i]; it.result = it.result === v ? null : v; renderReview(); }
-// 保存時に、×の項目で選んだ「実際にやったこと」を枠に反映する（元のタスクは枠から外して候補に戻す）。
+// 保存時に、×の項目で選んだ「実際にやったタスク」を枠に反映する（元のタスクは枠から外して候補に戻す）。
 // 実績の訂正なので、確定済みの枠・見積超過・分割のルールは見ない（placementFor を通さない）。戻せるよう、元の分数を relinked に残す
 function applyRelinks(r) {
   let moved = 0, restored = 0;
@@ -1508,39 +1519,71 @@ async function gistPush() {
   if (lsGet('sched_sample') === '1' && !confirm('今のデータはサンプルです。クラウド（Gist）のデータが、サンプルで上書きされます。本当に保存しますか？')) return;
   try {
     if (gid) {
-      const meta = await fetch(`https://api.github.com/gists/${gid}`, { headers: { Authorization: `token ${token}` } });
-      if (!meta.ok) throw new Error((await meta.json()).message || meta.status);
-      const m = await meta.json(); const last = lsGet('sched_last_saved');
-      if (last && m.updated_at > last && !confirm('クラウドのほうが新しい可能性があります（他の端末やスクリプトが更新）。上書き保存しますか？\n［キャンセル］で中止 → 設定の「読み込み」で取り込めます')) return;
+      // 保存の直前にクラウドを取り直し、この画面が読み込んだ後に更新されていたら、保存を止める（上書きで他端末の更新が消えるのを防ぐ）
+      const info = await cloudInfo(token, gid);
+      if (isStale(info)) {
+        _stale = true; showBanner();
+        if (confirm('別の端末で更新されています。再読込しますか？\n［OK］＝クラウドの内容を読み込みます（この画面の未保存の変更は消えます）\n［キャンセル］＝保存せずに中止します（この画面の変更はそのまま残ります）')) await gistPull(true);
+        return;
+      }
     }
     showToast('保存中…');
-    const body = { description: 'Schedule App Data', public: false, files: { [GIST_FILE]: { content: JSON.stringify(payload(), null, 2) } } };
+    const pl = payload();
+    const body = { description: 'Schedule App Data', public: false, files: { [GIST_FILE]: { content: JSON.stringify(pl, null, 2) } } };
     const res = await fetch(gid ? `https://api.github.com/gists/${gid}` : 'https://api.github.com/gists', { method: gid ? 'PATCH' : 'POST', headers: { Authorization: `token ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     if (!res.ok) throw new Error((await res.json()).message || res.status);
     const d = await res.json(); if (!gid) lsSet('sched_gist_id', d.id);
-    lsSet('sched_last_saved', d.updated_at || new Date().toISOString()); _dirty = false; hideBanner(); showToast('☁ クラウドに保存しました');
+    lsSet('sched_last_saved', d.updated_at || new Date().toISOString()); lsSet('sched_base_savedAt', pl.savedAt); lsSet('sched_loaded_at', new Date().toISOString());
+    _dirty = false; hideBanner(); showLoadedAt(); showToast('☁ クラウドに保存しました');
   } catch (e) { showToast('エラー: ' + e.message); }
 }
-async function gistPull() {
+// クラウド（Gist）の今の状態を取る。savedAt＝最後に保存したアプリが書いた時刻、updated_at＝Gistが最後に更新された時刻（スクリプトの書き込みも含む）
+async function cloudInfo(token, gid) {
+  const res = await fetch(`https://api.github.com/gists/${gid}`, { headers: { Authorization: `token ${token}` } });
+  if (!res.ok) throw new Error((await res.json()).message || res.status);
+  const data = await res.json(); const f = data.files[GIST_FILE]; if (!f) throw new Error(GIST_FILE + ' が見つかりません');
+  let raw = f.content;
+  if (f.truncated) { const r = await fetch(f.raw_url); if (!r.ok) throw new Error('rawデータの取得に失敗'); raw = await r.text(); }
+  let parsed = null; try { parsed = JSON.parse(raw); } catch (_) {}
+  return { updated_at: data.updated_at, savedAt: parsed && parsed.savedAt, parsed };
+}
+// この画面が最後に同期した内容より、クラウドが新しいか。savedAtとupdated_atの両方で見る（スクリプトがsavedAtを更新しない書き込みも拾うため）。
+// 一度も同期していない画面（目印が両方無い）は、クラウドにデータがあれば「新しい」扱い
+function isStale(info) {
+  const base = lsGet('sched_base_savedAt'), last = lsGet('sched_last_saved');
+  if (base && info.savedAt && info.savedAt > base) return true;
+  if (last && info.updated_at && info.updated_at > last) return true;
+  return !base && !last && !!info.savedAt;
+}
+async function gistPull(skipConfirm) {
   const token = lsGet('sched_gist_token'), gid = lsGet('sched_gist_id');
   if (!token || !gid) { showToast('トークンとGist IDを設定してください'); openSettings(); return; }
+  if (_dirty && !skipConfirm && !confirm('この画面に、保存していない変更があります。読み込むと消えます。読み込みますか？')) return;
   try {
     showToast('読込中…');
-    const res = await fetch(`https://api.github.com/gists/${gid}`, { headers: { Authorization: `token ${token}` } });
-    if (!res.ok) throw new Error((await res.json()).message || res.status);
-    const data = await res.json(); const f = data.files[GIST_FILE]; if (!f) throw new Error(GIST_FILE + ' が見つかりません');
-    let raw = f.content;
-    if (f.truncated) { const r = await fetch(f.raw_url); if (!r.ok) throw new Error('rawデータの取得に失敗'); raw = await r.text(); }
-    applyData(JSON.parse(raw)); lsSet('sched_sample', ''); save();
-    lsSet('sched_last_saved', data.updated_at || new Date().toISOString()); _dirty = false; hideBanner(); closeModal(); renderAll(); showToast('☁ 読み込みました');
+    const info = await cloudInfo(token, gid);
+    if (!info.parsed) throw new Error('クラウドのデータを読めませんでした');
+    applyData(info.parsed); lsSet('sched_sample', ''); save();
+    lsSet('sched_last_saved', info.updated_at || new Date().toISOString()); lsSet('sched_base_savedAt', info.savedAt || ''); lsSet('sched_loaded_at', new Date().toISOString());
+    _dirty = false; hideBanner(); showLoadedAt(); closeModal(); renderAll(); showToast('☁ 読み込みました');
   } catch (e) { showToast('エラー: ' + e.message); }
 }
+// 画面に戻ったとき・開いたときに、クラウドが新しくなっていないか確認する（1分に1回まで。失敗しても黙って何もしない）
+let _lastCheck = 0;
+async function checkCloud() {
+  const token = lsGet('sched_gist_token'), gid = lsGet('sched_gist_id');
+  if (!token || !gid || Date.now() - _lastCheck < 60000) return;
+  _lastCheck = Date.now();
+  try { const st = isStale(await cloudInfo(token, gid)); if (st !== _stale) { _stale = st; showBanner(); } } catch (_) {}
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkCloud(); });
+window.addEventListener('focus', checkCloud);
 window.addEventListener('beforeunload', e => { if (_dirty && lsGet('sched_gist_token')) { e.preventDefault(); e.returnValue = ''; } });
 
 // ───────── init ─────────
 if (window.innerWidth <= 600) S.view = 'day';   // スマホ幅は日ビューから始める（週は列が狭くなるため）
 { const z = parseInt(lsGet('sched_zoom'), 10); S.zoom = (z >= 0 && z < ZOOMS.length) ? z : (window.innerWidth <= 600 ? 1 : 0); HH = ZOOMS[S.zoom].hh; }
-loadAll(); renderAll();
+loadAll(); renderAll(); showLoadedAt(); checkCloud();
 </script>
 </body>
 </html>
