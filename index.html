@@ -24,7 +24,9 @@ button { font: inherit; cursor: pointer; }
 header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 8px 12px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; position: sticky; top: 0; z-index: 20; }
 header h1 { font-size: 16px; margin: 0 8px 0 0; }
 .ver { font-size: 10px; color: var(--muted); margin-left: 4px; }
+.btn:disabled { opacity: .35; cursor: default; }
 .loaded-at { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.clip-ind { align-items: center; gap: 6px; font-size: 12px; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px; padding: 2px 4px 2px 8px; }
 .btn { border: 1px solid var(--border); background: var(--surface); border-radius: 6px; padding: 5px 10px; color: var(--text); }
 .btn:hover { background: var(--bg); }
 .btn-primary { background: var(--primary); color: #fff; border-color: var(--primary); }
@@ -232,7 +234,9 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
   </div>
   <span class="zoom-ctl"><button class="btn" id="zoom-out" onclick="zoomBy(-1)" title="縮小">－</button><span class="lbl" id="zoom-lbl"></span><button class="btn" id="zoom-in" onclick="zoomBy(1)" title="拡大">＋</button></span>
   <span class="loaded-at" id="loaded-at"></span>
+  <span class="clip-ind" id="clip-ind" style="display:none"></span>
   <span class="spacer"></span>
+  <button class="btn" id="undo-btn" onclick="undo()" disabled>↩</button><button class="btn" id="redo-btn" onclick="redo()" disabled>↪</button>
   <button class="btn" id="prop-btn" onclick="openCandidates()">候補<span class="badge hidden" id="prop-badge2">0</span></button>
   <button class="btn" id="confirm-btn" onclick="confirmWeek()">この週を確定</button>
   <button class="btn" id="review-btn" onclick="openReview()">📝 振り返り</button>
@@ -251,7 +255,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 
 <script>
 'use strict';
-const APP_VERSION = 'v0.9.9';
+const APP_VERSION = 'v0.10.0';
 const GIST_FILE = 'schedule_data.json';
 const DAY_START = 6, DAY_END = 23;       // 表示する時間帯
 // 拡大レベル：1時間の高さ(px)と、ドラッグの刻み(分)。拡大するほど細かく動かせる（Shift押下中は5分）
@@ -342,9 +346,43 @@ function normalizeData() {
 }
 let _dirty = false;
 function save() {
+  const cur = snapState();
+  if (_snap !== null && cur !== _snap && !_undoPending) {   // 変更があれば、変更前の状態を積む（同じ操作の中の複数回のsaveは、1回分にまとめる）
+    _undo.push(_snap); if (_undo.length > UNDO_MAX) _undo.shift(); _redo = [];
+    _undoPending = true; queueMicrotask(() => { _undoPending = false; });
+  }
+  _snap = cur;
   for (const [prop, key] of Object.entries(KEYS)) lsSet(key, JSON.stringify(S[prop]));
-  _dirty = true; showBanner();
+  _dirty = true; showBanner(); updateUndoBtns();
 }
+// ───────── 元に戻す／やり直す（この画面を開いている間。保存済みのクラウドは、「保存」するまで変わらない）─────────
+// 予定・タスク・候補・振り返りなど、保存される全データの変更前の状態を30回分覚える。クラウドから読み込んだ時は、履歴を捨てる
+const UNDO_MAX = 30;
+let _undo = [], _redo = [], _snap = null, _undoPending = false;
+function snapState() { return JSON.stringify(Object.fromEntries(Object.keys(KEYS).map(p => [p, S[p]]))); }
+function resetUndo() { _undo = []; _redo = []; _snap = snapState(); updateUndoBtns(); }
+function updateUndoBtns() {
+  const u = document.getElementById('undo-btn'), r = document.getElementById('redo-btn');
+  if (u) { u.disabled = !_undo.length; u.title = `元に戻す（Ctrl+Z）${_undo.length ? '・あと' + _undo.length + '回' : ''}`; }
+  if (r) { r.disabled = !_redo.length; r.title = `やり直す（Ctrl+Y）${_redo.length ? '・あと' + _redo.length + '回' : ''}`; }
+}
+function applyUndo(json, msg) {
+  const d = JSON.parse(json); closeModal();
+  for (const p of Object.keys(KEYS)) S[p] = d[p];
+  normalizeData();
+  for (const [prop, key] of Object.entries(KEYS)) lsSet(key, JSON.stringify(S[prop]));
+  _snap = snapState(); _dirty = true; showBanner(); updateUndoBtns(); renderAll(); showToast(msg);
+}
+function undo() { if (!_undo.length) { showToast('元に戻せる操作がありません'); return; } _redo.push(_snap); applyUndo(_undo.pop(), '元に戻しました'); }
+function redo() { if (!_redo.length) { showToast('やり直せる操作がありません'); return; } _undo.push(_snap); applyUndo(_redo.pop(), 'やり直しました'); }
+document.addEventListener('keydown', e => {
+  if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+  const t = e.target, tag = t && t.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (t && t.isContentEditable)) return;   // 入力欄の中は、ブラウザ標準の取り消しに任せる
+  if (document.getElementById('modal-bg').classList.contains('open')) return;
+  const k = e.key.toLowerCase();
+  if (k === 'z' && !e.shiftKey) { e.preventDefault(); undo(); } else if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); redo(); }
+});
 let _stale = false;   // クラウドに、この画面より新しいデータがある（別の端末・スクリプトが更新）
 function showBanner() {
   const b = document.getElementById('sync-banner');
@@ -647,6 +685,7 @@ function bindGrid() {
       const sn = snapMin(e);
       const m = DAY_START*60 + Math.floor(y / HH * 60 / sn) * sn;
       const len = ZOOMS[S.zoom].snap;                       // 新規の枠の長さ＝拡大レベルの刻み（標準30分／拡大15分。Shiftの5分は開始位置だけに使う）
+      if (_blkClip) { pasteBlock(col.dataset.date, m); return; }   // コピー中は、空きを押すと貼り付け
       const st = Math.min(m, 24*60 - len);
       openBlock(null, col.dataset.date, fromMin(st), fromMin(st + len));
     });
@@ -944,7 +983,7 @@ function openBlock(id, date, start, end) {
     <div class="row ${b.recurrence ? '' : 'hidden'}" id="bm-recend-row"><label>終了日</label><input type="date" id="bm-recend" value="${b.recurrenceEnd || ''}"></div>
     <div class="row"><label>状態</label><select id="bm-status"><option value="draft" ${isDraft(b) ? 'selected' : ''}>仮</option><option value="confirmed" ${!isDraft(b) ? 'selected' : ''}>確定</option></select></div>
     ${id ? blockTasksSection(b, date) : '<div class="empty">タスクの紐づけは、保存後に開き直して行えます。</div>'}
-    <div class="foot">${id ? '<button class="btn btn-danger" onclick="removeBlock()">削除</button>' : ''}<span class="spacer"></span><button class="btn" onclick="closeModal()">キャンセル</button><button class="btn btn-primary" onclick="saveBlockModal()">保存</button></div>`);
+    <div class="foot">${id ? '<button class="btn btn-danger" onclick="removeBlock()">削除</button><button class="btn" onclick="copyBlock()" title="この枠をコピーして、カレンダーの空きに貼り付けます">コピー</button>' : ''}<span class="spacer"></span><button class="btn" onclick="closeModal()">キャンセル</button><button class="btn btn-primary" onclick="saveBlockModal()">保存</button></div>`);
 }
 function blockTasksSection(b, viewDate) {
   const ts = blockTasks(b.id), st = blockStats(b);
@@ -980,6 +1019,29 @@ function saveBlockModal() {
   closeModal(); renderAll();
   if (mis) showToast(`区分を変えました。区分の違うタスク${mis}件は、枠に残しています`);
 }
+// ── 枠のコピー＆貼り付け ──
+// 枠の編集画面の「コピー」で、名前・テーマ・区分・長さを覚える（タスク・繰り返し・状態はコピーしない。貼ったものは「仮」）。
+// コピー中は、カレンダーの空きを押すと、押した時刻に同じ長さで貼り付く（続けて何度でも。週や日を移っても有効）。「✕」かEscで終わり
+let _blkClip = null;
+function copyBlock() {
+  const b = _bm && _bm.id ? blockById(_bm.id) : null; if (!b) return;
+  _blkClip = { title: b.title, theme: b.theme, kind: b.kind, len: toMin(b.endTime) - toMin(b.startTime) };
+  closeModal(); showClip(); showToast('コピーしました。貼り付けたい所（空いている部分）を押してください');
+}
+function pasteBlock(date, startMin) {
+  const c = _blkClip; if (!c) return;
+  const s = Math.max(0, Math.min(startMin, 24*60 - c.len));
+  addBlock({ title: c.title, theme: c.theme, kind: c.kind, date, startTime: fromMin(s), endTime: fromMin(s + c.len), status: 'draft' });
+  renderAll(); showToast(`貼り付けました（${fmtMD(date)} ${fromMin(s)}–${fromMin(s + c.len)}）。続けて貼れます`);
+}
+function clearClip() { _blkClip = null; showClip(); }
+function showClip() {
+  const el = document.getElementById('clip-ind');
+  if (!_blkClip) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  el.style.display = 'inline-flex';
+  el.innerHTML = `<span>📋 ${h(_blkClip.title || '作業枠')}（${_blkClip.len}分）を貼り付け中：空きを押す</span><button class="btn btn-sm" onclick="clearClip()" title="コピーをやめる（Esc）">✕</button>`;
+}
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && _blkClip && !document.getElementById('modal-bg').classList.contains('open')) clearClip(); });
 function removeBlock() { if (!confirm('この作業枠を削除します（繰り返しの場合は全ての発生日が消えます）。よろしいですか？')) return; deleteBlock(_bm.id); closeModal(); renderAll(); }
 function toggleTask(id) { const t = taskById(id); if (!t) return; t.completed = !t.completed; t.completedAt = t.completed ? new Date().toISOString() : null; save(); renderAll(); reopenBlock(); }
 function unlinkFromModal(taskId) { unlinkTask(taskId, _bm.id); renderAll(); reopenBlock(); }
@@ -1563,7 +1625,7 @@ async function gistPull(skipConfirm) {
     showToast('読込中…');
     const info = await cloudInfo(token, gid);
     if (!info.parsed) throw new Error('クラウドのデータを読めませんでした');
-    applyData(info.parsed); lsSet('sched_sample', ''); save();
+    applyData(info.parsed); lsSet('sched_sample', ''); save(); resetUndo();
     lsSet('sched_last_saved', info.updated_at || new Date().toISOString()); lsSet('sched_base_savedAt', info.savedAt || ''); lsSet('sched_loaded_at', new Date().toISOString());
     _dirty = false; hideBanner(); showLoadedAt(); closeModal(); renderAll(); showToast('☁ 読み込みました');
   } catch (e) { showToast('エラー: ' + e.message); }
@@ -1583,7 +1645,7 @@ window.addEventListener('beforeunload', e => { if (_dirty && lsGet('sched_gist_t
 // ───────── init ─────────
 if (window.innerWidth <= 600) S.view = 'day';   // スマホ幅は日ビューから始める（週は列が狭くなるため）
 { const z = parseInt(lsGet('sched_zoom'), 10); S.zoom = (z >= 0 && z < ZOOMS.length) ? z : (window.innerWidth <= 600 ? 1 : 0); HH = ZOOMS[S.zoom].hh; }
-loadAll(); renderAll(); showLoadedAt(); checkCloud();
+loadAll(); resetUndo(); renderAll(); showLoadedAt(); checkCloud();
 </script>
 </body>
 </html>
