@@ -255,7 +255,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 
 <script>
 'use strict';
-const APP_VERSION = 'v0.10.1';
+const APP_VERSION = 'v0.10.2';
 const GIST_FILE = 'schedule_data.json';
 const DAY_START = 6, DAY_END = 23;       // 表示する時間帯
 // 拡大レベル：1時間の高さ(px)と、ドラッグの刻み(分)。拡大するほど細かく動かせる（Shift押下中は5分）
@@ -990,7 +990,7 @@ function blockTasksSection(b, viewDate) {
   const unplaced = S.tasks.filter(t => !t.completed && !isParent(t) && !(t.blockIds || []).includes(b.id) && placementFor(t, b).ok);
   const sug = suggestFor(b);
   return `<div class="sect"><h4>この枠のタスク（${st.done}/${st.total}完了 ／ 見積${st.used}分 ／ ${st.free === 0 && st.total ? '残0分（いっぱい）' : st.free < 0 ? `<b style="color:var(--danger)">${-st.free}分超過</b>` : `残${st.free}分`}）</h4>
-    ${ts.map(t => `<div class="task-row"><input type="checkbox" ${t.completed ? 'checked' : ''} onchange="toggleTask('${t.id}')"><span class="ttl">${h(t.title)}</span><span class="meta">${allocOf(t, b.id) !== null ? allocOf(t, b.id) + '分' : estLabel(t)}</span><button class="btn btn-sm" onclick="unlinkFromModal('${t.id}')">外す</button></div>`).join('') || '<div class="empty">まだありません</div>'}
+    ${ts.map(t => `<div class="task-row"><input type="checkbox" ${t.completed ? 'checked' : ''} onchange="toggleTask('${t.id}')"><span class="ttl">${h(t.title)}</span><span class="meta">${allocOf(t, b.id) !== null ? allocOf(t, b.id) + '分' : estLabel(t)}</span><button class="btn btn-sm" onclick="editTaskFromBlock('${t.id}')" title="名前・見積・この枠の分数などを直します">編集</button><button class="btn btn-sm" onclick="unlinkFromModal('${t.id}')">外す</button></div>`).join('') || '<div class="empty">まだありません</div>'}
     <div class="row" style="margin-top:6px"><select id="bm-addtask"><option value="">タスクを追加…</option>${unplaced.map(t => `<option value="${t.id}">${h(t.title)}</option>`).join('')}</select>
     <button class="btn btn-sm" onclick="addTaskFromModal()">追加</button></div></div>
     <div class="sect"><h4>おすすめ（期限・優先度・残り時間から）</h4>
@@ -1051,17 +1051,25 @@ function reopenBlock() { if (_bm && _bm.id) openBlock(_bm.id, _bm.viewDate); }
 
 // ───────── task edit modal（追加・編集・削除）─────────
 let _te = null;
-function openTaskEdit(id) {
-  _te = id;
+let _teBack = null;   // 枠のダイアログから開いたときの戻り先 {blockId, viewDate}。保存・キャンセル・削除のあと、その枠のダイアログへ戻る
+function editTaskFromBlock(taskId) { openTaskEdit(taskId, { blockId: _bm.id, viewDate: _bm.viewDate }); }
+function backToBlock() { const b = _teBack; _teBack = null; if (b && blockById(b.blockId)) openBlock(b.blockId, b.viewDate); else closeModal(); }
+function openTaskEdit(id, back) {
+  _te = id; _teBack = back || null;
   const t = id ? taskById(id) : { title: '', intent: '', estimateH: null, split: '', dueDate: '', rank: null, scale: 'medium', priority: 'medium', week: viewWeek(), kind: VIEW_KIND === 'private' ? 'private' : undefined };
   if (!t) return;
   const sel = (val, opts) => opts.map(([v, l]) => `<option value="${v}" ${String(val || '') === v ? 'selected' : ''}>${l}</option>`).join('');
+  const bk = _teBack && id ? blockById(_teBack.blockId) : null;
+  const allocRow = bk && (t.blockIds || []).includes(bk.id)
+    ? `<div class="row"><label>この枠の分数</label><input id="te-alloc" type="number" step="1" min="1" inputmode="numeric" value="${allocOf(t, bk.id) === null ? '' : allocOf(t, bk.id)}" placeholder="空欄＝見積どおり（${taskMin(t)}分）"><span class="empty">「${h(bk.title || '作業枠')}」${bk.startTime}–${bk.endTime} に入れた分</span></div>` : '';
   openModal(`<h3>${id ? 'タスクを編集' : 'タスクを追加'}<button class="btn btn-sm" onclick="cancelTaskEdit()">✕</button></h3>
+    ${bk ? `<div class="empty" style="margin-bottom:6px">枠のダイアログから開きました。保存・キャンセルで、その枠へ戻ります（枠のダイアログで入力中だった内容は、消えています）</div>` : ''}
     ${parentOf(t) ? `<div class="row"><label>親</label><span>${h(parentOf(t).title)}</span></div>` : ''}
     <div class="row"><label>名前</label><input id="te-title" value="${h(t.title)}" placeholder="例：資料の下書き"></div>
     <div class="row"><label>区分</label><select id="te-kind">${sel(kindOf(t), [['work', '仕事'], ['private', 'プライベート']])}</select><span class="empty">プライベートは、プライベートの枠にだけ入ります</span></div>
     <div class="row"><label>意思</label><select id="te-intent">${sel(t.intent, [['', '（なし）'], ['◎', '◎'], ['〇', '〇']])}</select></div>
     <div class="row"><label>見積(h)</label><input id="te-est" type="number" step="0.25" min="0" inputmode="decimal" value="${t.estimateH || ''}" placeholder="例：2.25"></div>
+    ${allocRow}
     <div class="row"><label>分割</label><select id="te-split">${sel(t.split, [['', '（未設定）'], ['NG', 'NG（分けない）'], ['△', '△（なるべく分けない）'], ['〇', '〇（30分まで分けてよい）']])}</select></div>
     <div class="row"><label>対象の週</label><input id="te-week" type="date" value="${t.week || ''}"><button class="btn btn-sm" type="button" onclick="setTeWeek(0)">今週</button><button class="btn btn-sm" type="button" onclick="setTeWeek(1)">来週</button><button class="btn btn-sm" type="button" onclick="setTeWeek(-1)">なし</button></div>
     <div class="row"><label></label><span class="empty">この週の候補に出ます（月曜の日付に直して保存）。「なし」は、候補の「週の指定なし」に出ます</span></div>
@@ -1071,7 +1079,7 @@ function openTaskEdit(id) {
     <div class="foot">${id ? '<button class="btn btn-danger" onclick="deleteTaskFromEdit()">削除</button>' : ''}<span class="spacer"></span><button class="btn" onclick="cancelTaskEdit()">キャンセル</button><button class="btn btn-primary" onclick="saveTaskEdit()">保存</button></div>`);
 }
 function setTeWeek(n) { document.getElementById('te-week').value = n < 0 ? '' : addDays(weekStart(today()), 7 * n); }
-function cancelTaskEdit() { if (_candCtx) openCandidates(); else closeModal(); }
+function cancelTaskEdit() { if (_teBack) backToBlock(); else if (_candCtx) openCandidates(); else closeModal(); }
 function saveTaskEdit() {
   const title = document.getElementById('te-title').value.trim();
   if (!title) { showToast('名前を入れてください'); return; }
@@ -1087,9 +1095,13 @@ function saveTaskEdit() {
   const t = _te ? taskById(_te) : null;
   if (t && kindOf(d) !== kindOf(t) && taskBlocksOf(t).length) { showToast('区分を変えるには、先にこのタスクを枠から外してください'); return; }
   if (t) Object.assign(t, d);
-  else S.tasks.push({ id: uuid(), completed: false, blockIds: [], priority: 'medium', createdAt: new Date().toISOString(), ...d });
-  save(); const back = _candCtx; closeModal(); renderAll(); showToast('保存しました');
-  if (back) openCandidates();
+  if (t && document.getElementById('te-alloc')) {                              // この枠への割り当て分数（実績の訂正なので、枠の空き・分割のルールは見ない）
+    const a = parseInt(document.getElementById('te-alloc').value, 10), bid = _teBack.blockId;
+    if (a > 0) { t.alloc = t.alloc || {}; t.alloc[bid] = a; } else if (t.alloc) delete t.alloc[bid];
+  }
+  if (!t) S.tasks.push({ id: uuid(), completed: false, blockIds: [], priority: 'medium', createdAt: new Date().toISOString(), ...d });
+  save(); const back = _candCtx, bb = _teBack; closeModal(); renderAll(); showToast('保存しました');
+  if (bb) { _teBack = bb; backToBlock(); } else if (back) openCandidates();
 }
 function deleteTaskFromEdit() {
   const t = taskById(_te); if (!t) return;
@@ -1097,8 +1109,8 @@ function deleteTaskFromEdit() {
   if (!confirm(`「${t.title}」を削除します（枠に入っている場合は、枠から外れます）。${kids.length ? `\n分解した子${kids.length}件は消さず、単独のタスクに戻します。` : ''}\nよろしいですか？`)) return;
   kids.forEach(c => { delete c.parentId; });
   S.tasks = S.tasks.filter(x => x.id !== _te);
-  save(); const back = _candCtx; closeModal(); renderAll(); showToast('削除しました');
-  if (back) openCandidates();
+  save(); const back = _candCtx, bb = _teBack; closeModal(); renderAll(); showToast('削除しました');
+  if (bb) { _teBack = bb; backToBlock(); } else if (back) openCandidates();
 }
 
 // ───────── 分解（フェーズを、子のタスクに分ける）─────────
