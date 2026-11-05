@@ -255,7 +255,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 
 <script>
 'use strict';
-const APP_VERSION = 'v0.10.2';
+const APP_VERSION = 'v0.10.3';
 const GIST_FILE = 'schedule_data.json';
 const DAY_START = 6, DAY_END = 23;       // 表示する時間帯
 // 拡大レベル：1時間の高さ(px)と、ドラッグの刻み(分)。拡大するほど細かく動かせる（Shift押下中は5分）
@@ -491,7 +491,7 @@ function blockStats(b) {
   const used = ts.reduce((sum, t) => sum + taskUsage(t, b.id), 0);
   return { total: ts.length, done: ts.filter(t => t.completed).length, used, free: (toMin(b.endTime) - toMin(b.startTime)) - used };
 }
-function effectiveTitle(b) { const ts = blockTasks(b.id); return ts.length ? ts.map(t => t.title).join('; ') : (b.title || '作業枠'); }
+function effectiveTitle(b) { const ts = blockTasks(b.id).filter(t => !t.record); return ts.length ? ts.map(t => t.title).join('; ') : (b.title || '作業枠'); }
 function themeClass(theme) {
   if (!theme) return 'th-none';
   return DEFAULT_THEMES.includes(theme) ? 'th-' + theme : 'th-other';
