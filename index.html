@@ -185,6 +185,13 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 .rv-opt.on { background: #dbeafe; }
 .rv-sel { color: #6b7280; margin-top: 2px; }
 .rv-relinked { background: #f3f4f6; border-radius: 6px; padding: 5px 8px; }
+.rv-tag { display: inline-block; font-size: 11px; font-weight: 700; color: #b91c1c; background: #fee2e2; border-radius: 4px; padding: 0 5px; margin-right: 6px; }
+.rv-hint { font-size: 11px; color: #6b7280; align-self: center; }
+.rv-legacy { font-size: 11px; color: #6b7280; background: #f3f4f6; border-radius: 4px; padding: 0 5px; margin-left: 6px; align-self: center; }
+.rv-missing { border-color: var(--danger); background: #fef2f2; }
+.rv-ex { margin: 6px 0 2px; flex-wrap: wrap; }
+.rv-ex button { width: auto; font-size: 13px; padding: 2px 10px; white-space: nowrap; }
+.rv-ex button.sel-ex { background: #dbeafe; border-color: #3b82f6; }
 #toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); background: #111827; color: #fff; padding: 8px 14px; border-radius: 8px; z-index: 200; display: none; font-size: 13px; }
 
 @media (max-width: 900px) {
@@ -255,7 +262,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 
 <script>
 'use strict';
-const APP_VERSION = 'v0.10.3';
+const APP_VERSION = 'v0.10.4';
 const GIST_FILE = 'schedule_data.json';
 const DAY_START = 6, DAY_END = 23;       // 表示する時間帯
 // 拡大レベル：1時間の高さ(px)と、ドラッグの刻み(分)。拡大するほど細かく動かせる（Shift押下中は5分）
@@ -1327,6 +1334,10 @@ function confirmWeek() {
 
 // ───────── review ─────────
 let _rv = null;
+// 約束枠の項目＝意思（◎〇）の付いたタスク。付け替え済みで元のタスクが枠から外れていても、タスク自体の意思で判定する
+const isPromiseTask = id => !!(id && taskById(id)?.intent);
+// 付け替え（実際にやったタスクを選ぶ入口）を開くか：約束枠は×のとき、それ以外は「例外：付け替え」を選んだとき
+const wantsRelink = it => it.promise ? it.result === 'bad' : it.exKind === 'relink';
 function openReview() {
   const ds = S.cur;
   const existing = S.reviews.find(r => r.date === ds);
@@ -1338,14 +1349,17 @@ function openReview() {
   });
   items.forEach(it => {
     const prev = existing && existing.items.find(x => x.blockId === it.blockId && x.taskId === it.taskId);
+    it.promise = isPromiseTask(it.taskId);                                    // 約束枠＝意思（◎〇）の付いたタスクを持つ枠。○×を出すのはここだけ
     it.result = prev ? prev.result : null; it.comment = prev ? prev.comment || '' : '';
     it.done = prev && prev.doneTaskIds ? prev.doneTaskIds.slice() : [];
-    if (!prev && it.taskId && taskById(it.taskId)?.completed) it.result = 'good';
+    it.exKind = prev && prev.exception ? prev.exception.kind : null; it.exText = prev && prev.exception ? prev.exception.text || '' : '';
+    if (!prev && it.promise && taskById(it.taskId)?.completed) it.result = 'good';
   });
   // 付け替え済みの項目：枠のいまのタスクからは作れない（元のタスクは枠から外れている）ので、保存済みの記録から足す
   if (existing) existing.items.filter(x => x.relinked && blockById(x.blockId) && isBlockOnDate(blockById(x.blockId), ds) && !items.some(i => i.blockId === x.blockId && i.taskId === x.taskId)).forEach(x => {
     const b = blockById(x.blockId);
-    items.push({ blockId: x.blockId, taskId: x.taskId, title: x.title, slot: `${b.startTime}–${b.endTime}`, result: x.result, comment: x.comment || '', done: (x.doneTaskIds || []).slice(), relinked: { ...x.relinked, addedIds: (x.relinked.addedIds || []).slice() }, undo: false });
+    items.push({ blockId: x.blockId, taskId: x.taskId, title: x.title, slot: `${b.startTime}–${b.endTime}`, result: x.result, comment: x.comment || '', done: (x.doneTaskIds || []).slice(),
+      promise: isPromiseTask(x.taskId), exKind: x.exception ? x.exception.kind : null, exText: x.exception ? x.exception.text || '' : '', relinked: { ...x.relinked, addedIds: (x.relinked.addedIds || []).slice() }, undo: false });
   });
   items.sort((a, b) => a.slot.localeCompare(b.slot));
   _rv = { date: ds, items, memo: existing ? existing.memo || '' : '' };
@@ -1372,7 +1386,7 @@ function reviewDoneHtml(it, i) {
     return `<div class="rv-done rv-relinked">${it.undo ? '保存すると、元のタスクに戻します' : '付け替え済み → ' + h(names.join('、') || '（追加なし）')}
       <button class="btn btn-sm" onclick="toggleUndo(${i})">${it.undo ? '戻すのをやめる' : '付け替えを戻す'}</button></div>`;
   }
-  if (it.result !== 'bad') return '';
+  if (!wantsRelink(it)) return '';
   const cs = reviewChoices(it);
   return `<div class="rv-done"><div class="lbl">実際にやったタスク（保存すると、この枠のタスクを付け替えます）</div>${cs.length
     ? `<div class="rv-list">${cs.map(t => `<label class="rv-opt ${it.done.includes(t.id) ? 'on' : ''}" title="${h(t.title)}"><input type="checkbox" ${it.done.includes(t.id) ? 'checked' : ''} onchange="toggleDone(${i},'${t.id}',this)">${reviewOptHtml(t)}</label>`).join('')}</div><div class="rv-sel" id="rv-sel-${i}">${it.done.length}件選択中</div>`
@@ -1399,16 +1413,34 @@ function toggleDone(i, id, el) {
   if (el) { el.closest('.rv-opt').classList.toggle('on', k < 0); const s = document.getElementById('rv-sel-' + i); if (s) s.textContent = `${it.done.length}件選択中`; }
 }
 function toggleUndo(i) { const it = _rv.items[i]; it.undo = !it.undo; renderReview(); }
+const RV_EX = [['relink', '付け替え'], ['sudden', '突発'], ['minor', '小物']];
+const RV_MARK = { good: '○', partial: '△', bad: '×' };
+function reviewItemHtml(it, i) {
+  const inp = 'style="width:100%;padding:5px 7px;border:1px solid var(--border);border-radius:6px;font:inherit"';
+  if (it.promise) {
+    // 約束枠：○か×を選ばないと保存できない（○＝手を付けた／×＝手を付けず）。△は選べない（過去の記録で△のものは、印だけ残す）
+    const legacy = it.result === 'partial' ? `<span class="rv-legacy">以前の記録：△</span>` : '';
+    return `<div class="rv-item ${it.missing ? 'rv-missing' : ''}"><div class="rt"><span class="rv-tag">約束</span>${it.slot} ${h(it.title)}</div>
+      <div class="rv-btns">${[['good', '○'], ['bad', '×']].map(([v, l]) => `<button class="btn ${it.result === v ? 'sel-' + v : ''}" onclick="setResult(${i},'${v}')">${l}</button>`).join('')}${legacy}<span class="rv-hint">○＝手を付けた／×＝手を付けず</span></div>
+      <input ${inp} placeholder="理由（任意）" value="${h(it.comment)}" oninput="_rv.items[${i}].comment=this.value">${reviewDoneHtml(it, i)}</div>`;
+  }
+  // 約束枠でない枠：○△×は出さない。一言と、例外（付け替え／突発／小物）だけ。過去の記録に○△×があれば、印だけ見せる
+  const old = it.result ? `<span class="rv-legacy">以前の記録：${RV_MARK[it.result]}</span>` : '';
+  return `<div class="rv-item"><div class="rt">${it.slot} ${h(it.title)}${old}</div>
+    <input ${inp} placeholder="一言（任意）" value="${h(it.comment)}" oninput="_rv.items[${i}].comment=this.value">
+    <div class="rv-btns rv-ex"><span class="rv-hint">例外</span>${RV_EX.map(([v, l]) => `<button class="btn btn-sm ${it.exKind === v ? 'sel-ex' : ''}" onclick="setEx(${i},'${v}')">${l}</button>`).join('')}</div>
+    ${it.exKind === 'sudden' || it.exKind === 'minor' ? `<input ${inp} placeholder="${it.exKind === 'sudden' ? '突発：何が入ったか（1行）' : '小物：何をしたか（1行）'}" value="${h(it.exText)}" oninput="_rv.items[${i}].exText=this.value">` : ''}${reviewDoneHtml(it, i)}</div>`;
+}
 function renderReview() {
-  const r = _rv;
+  const r = _rv, np = r.items.filter(it => it.promise).length;
   openModal(`<h3>${fmtMD(r.date)} の振り返り<button class="btn btn-sm" onclick="closeModal()">✕</button></h3>
-    ${r.items.map((it, i) => `<div class="rv-item"><div class="rt">${it.slot} ${h(it.title)}</div>
-      <div class="rv-btns">${[['good', '○'], ['partial', '△'], ['bad', '×']].map(([v, l]) => `<button class="btn ${it.result === v ? 'sel-' + v : ''}" onclick="setResult(${i},'${v}')">${l}</button>`).join('')}</div>
-      <input style="width:100%;padding:5px 7px;border:1px solid var(--border);border-radius:6px;font:inherit" placeholder="理由" value="${h(it.comment)}" oninput="_rv.items[${i}].comment=this.value">${reviewDoneHtml(it, i)}</div>`).join('') || '<div class="empty">この日の振り返り対象（テーマ付きの予定）がありません</div>'}
+    ${r.items.length && !np ? '<div class="empty">この日は約束枠（意思◎〇のタスクが入った枠）がありません。○×は不要で、一言だけでも保存できます</div>' : ''}
+    ${r.items.map((it, i) => reviewItemHtml(it, i)).join('') || '<div class="empty">この日の振り返り対象（テーマ付きの予定）がありません。一言だけでも保存できます</div>'}
     <div class="row"><label>一言</label><input value="${h(r.memo)}" oninput="_rv.memo=this.value"></div>
     <div class="foot"><span class="spacer"></span><button class="btn" onclick="closeModal()">キャンセル</button><button class="btn btn-primary" onclick="saveReview()">保存</button></div>`);
 }
-function setResult(i, v) { const it = _rv.items[i]; it.result = it.result === v ? null : v; renderReview(); }
+function setResult(i, v) { const it = _rv.items[i]; it.result = it.result === v ? null : v; it.missing = false; renderReview(); }
+function setEx(i, v) { const it = _rv.items[i]; it.exKind = it.exKind === v ? null : v; renderReview(); }
 // 保存時に、×の項目で選んだ「実際にやったタスク」を枠に反映する（元のタスクは枠から外して候補に戻す）。
 // 実績の訂正なので、確定済みの枠・見積超過・分割のルールは見ない（placementFor を通さない）。戻せるよう、元の分数を relinked に残す
 function applyRelinks(r) {
@@ -1420,7 +1452,7 @@ function applyRelinks(r) {
       (it.relinked.addedIds || []).forEach(id => { if (inB(id)) unlinkTask(id, b.id); });
       if (it.taskId && taskById(it.taskId) && !inB(it.taskId)) linkTask(it.taskId, b.id, typeof it.relinked.fromAlloc === 'number' ? it.relinked.fromAlloc : undefined);
       it.relinked = null; it.undo = false; it.done = []; restored++;
-    } else if (!it.relinked && it.result === 'bad' && it.done.length) {
+    } else if (!it.relinked && wantsRelink(it) && it.done.length) {
       const from = it.taskId ? taskById(it.taskId) : null;
       const fromAlloc = from ? allocOf(from, b.id) : null;
       const total = from ? taskUsage(from, b.id) : (toMin(b.endTime) - toMin(b.startTime));
@@ -1437,9 +1469,15 @@ function applyRelinks(r) {
   return { moved, restored };
 }
 function saveReview() {
-  const r = _rv; const res = applyRelinks(r);
+  const r = _rv;
+  // 約束枠は、○か×（過去の記録の△は、そのままで可）を選ばないと保存できない。約束枠のない日は、何も強制しない
+  r.items.forEach(it => { it.missing = it.promise && !it.result; });
+  const miss = r.items.filter(it => it.missing);
+  if (miss.length) { renderReview(); showToast(`約束枠${miss.length}件に、○か×を付けてください`); return; }
+  const res = applyRelinks(r);
+  const exOf = it => it.exKind ? { kind: it.exKind, text: it.exKind === 'relink' ? '' : (it.exText || '').trim() } : null;
   const rec = { id: uuid(), date: r.date, items: r.items.map(it => ({ blockId: it.blockId, taskId: it.taskId, title: it.title, result: it.result, comment: it.comment,
-    doneTaskIds: (it.result === 'bad' || it.relinked) ? it.done : [], relinked: it.relinked || null })), memo: r.memo, createdAt: new Date().toISOString() };
+    doneTaskIds: (wantsRelink(it) || it.relinked) ? it.done : [], relinked: it.relinked || null, exception: exOf(it) })), memo: r.memo, createdAt: new Date().toISOString() };
   const i = S.reviews.findIndex(x => x.date === r.date);
   if (i >= 0) { rec.id = S.reviews[i].id; S.reviews[i] = rec; } else S.reviews.push(rec);
   save(); closeModal(); renderAll();
