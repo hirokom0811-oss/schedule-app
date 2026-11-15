@@ -267,7 +267,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 
 <script>
 'use strict';
-const APP_VERSION = 'v2.0.0';
+const APP_VERSION = 'v2.1.0';
 const GIST_FILE = 'schedule_data.json';
 const DAY_START = 6, DAY_END = 23;       // 表示する時間帯
 // 拡大レベル：1時間の高さ(px)と、ドラッグの刻み(分)。拡大するほど細かく動かせる（Shift押下中は5分）
@@ -1592,6 +1592,76 @@ function exportIcs() {
   a.click(); URL.revokeObjectURL(a.href); closeModal(); showToast(`${n}件を出力しました${privNote}`);
 }
 
+// ───────── 記録の取り込み（MUSEなど、他のAIが「やったこと」を登録する）─────────
+// 設定の入力欄にJSONを貼って「追加」を押すだけ。追加のみ（既存のタスク・枠・振り返りは変えない）。形式の検査に通らなければ、何も追加しない。
+// 登録の中身は tools/register_session_task.py と同じ（完了タスク・record:true・所要時間・重なる枠に紐づけ）。書き込み元は task.source に残す
+const IMP_MAX = { records: 20, chars: 20000, title: 100, did: 20, didLen: 200 };
+function parseImportRecords(text) {
+  const bad = errs => ({ recs: [], source: '', errs });
+  if (!text || !text.trim()) return bad(['貼り付けた内容が空です']);
+  if (text.length > IMP_MAX.chars) return bad([`長すぎます（${IMP_MAX.chars}文字まで）`]);
+  let o; try { o = JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')); } catch (e) { return bad(['JSONとして読めません：' + e.message]); }
+  const source = String((o && !Array.isArray(o) && o.source) || '').trim().slice(0, 30);
+  const arr = Array.isArray(o) ? o : (o && Array.isArray(o.records)) ? o.records : [o];
+  if (arr.length > IMP_MAX.records) return bad([`一度に追加できるのは${IMP_MAX.records}件までです（${arr.length}件ありました）`]);
+  if (!arr.length) return bad(['recordsが空です']);
+  const errs = [], recs = [], hm = /^([01]\d|2[0-3]):[0-5]\d$/, now = new Date(), nowMin = now.getHours() * 60 + now.getMinutes();
+  arr.forEach((r, i) => {
+    const p = `${i + 1}件目：`, e0 = errs.length;
+    if (!r || typeof r !== 'object') { errs.push(p + '形式が違います'); return; }
+    const title = String(r.title ?? '').trim(), date = r.date ? String(r.date) : today();
+    if (!title) errs.push(p + 'titleがありません'); else if (title.length > IMP_MAX.title) errs.push(p + `titleが長すぎます（${IMP_MAX.title}文字まで）`);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || isNaN(parseDate(date)) || dateStr(parseDate(date)) !== date) errs.push(p + 'dateは YYYY-MM-DD で指定してください');
+    const st = String(r.start ?? ''), en = String(r.end ?? '');
+    if (!hm.test(st) || !hm.test(en)) errs.push(p + 'start・endは HH:MM で指定してください');
+    else if (toMin(en) <= toMin(st)) errs.push(p + 'endがstartより前です');
+    else if (date === today() && toMin(en) > nowMin) errs.push(p + `endが現在時刻（${fromMin(nowMin)}）より未来です。実際に終えた時刻を入れてください`);   // 見込み時刻の混入を止める（register_session_task.py と同じ）
+    const did = r.did === undefined || r.did === null ? [] : Array.isArray(r.did) ? r.did : [r.did];
+    if (did.length > IMP_MAX.did || did.some(d => typeof d !== 'string' || d.length > IMP_MAX.didLen)) errs.push(p + `didは文字列${IMP_MAX.did}個まで、1つ${IMP_MAX.didLen}文字までです`);
+    if (errs.length === e0) recs.push({ title, date, start: st, end: en, did: did.map(d => d.trim()).filter(Boolean) });
+  });
+  return { recs: errs.length ? [] : recs, source, errs };
+}
+// 追加する。戻り値：{errs, added[], skipped[]}。1回の追加は、元に戻す1回分にまとまる
+function importRecords(text) {
+  const { recs, source, errs } = parseImportRecords(text);
+  if (errs.length) return { errs, added: [], skipped: [] };
+  const added = [], skipped = [], nowIso = new Date().toISOString();
+  recs.forEach(r => {
+    if (S.tasks.some(t => t.title === r.title && t.dueDate === r.date && t.completed)) { skipped.push(r); return; }   // 同じ日・同じ名前の完了タスクは、二重に追加しない
+    const s = toMin(r.start), e = toMin(r.end), min = e - s;
+    const hits = blocksOn(r.date).filter(b => kindOf(b) === 'work' && toMin(b.startTime) < e && toMin(b.endTime) > s);
+    const link = hits.length ? hits.reduce((a, b) => (Math.min(e, toMin(b.endTime)) - Math.max(s, toMin(b.startTime))) > (Math.min(e, toMin(a.endTime)) - Math.max(s, toMin(a.startTime))) ? b : a) : null;   // 重なりが最も大きい仕事の枠
+    const memo = [`${r.start}〜${r.end}（${min}分）`, ...(hits.length ? ['重なる枠：' + hits.map(b => b.title || '作業枠').join('、')] : []), ...r.did].join('。');
+    const t = { id: uuid(), title: r.title, dueDate: r.date, priority: 'medium', scale: scaleFromMin(min), estimateH: Math.round(min / 60 * 10000) / 10000, week: weekStart(r.date),
+      completed: true, completedAt: nowIso, record: true, blockIds: link ? [link.id] : [], memo, createdAt: nowIso };
+    if (source) t.source = source;
+    if (link) t.alloc = { [link.id]: min };
+    S.tasks.push(t); added.push({ ...r, block: link ? (link.title || '作業枠') : null });
+  });
+  if (added.length) { save(); renderAll(); }
+  return { errs: [], added, skipped };
+}
+async function runImport() {
+  const text = document.getElementById('imp-text').value, push = document.getElementById('imp-push').checked;
+  const out = document.getElementById('imp-result'), res = importRecords(text);
+  const li = a => a.map(x => `<li>${h(x)}</li>`).join('');
+  if (res.errs.length) { out.innerHTML = `<b style="color:var(--danger)">追加していません（検査に通りませんでした）</b><ul>${li(res.errs)}</ul>`; return; }
+  let note = '';
+  if (res.added.length && push) {
+    if (lsGet('sched_gist_token') && lsGet('sched_gist_id')) { await gistPush(); note = _dirty ? '<br>クラウドへの保存は完了していません（上の通知を確認してください）' : '<br>クラウドに保存しました'; }
+    else note = '<br>トークン・Gist IDが未設定のため、クラウドへは保存していません';
+  } else if (res.added.length) note = '<br>クラウドへは保存していません（「今すぐ保存」で保存します）';
+  out.innerHTML = `<b>${res.added.length}件を追加しました</b>${res.skipped.length ? `（${res.skipped.length}件は、同じ日・同じ名前の記録済みのためスキップ）` : ''}<ul>${li(res.added.map(a => `${a.date} ${a.start}–${a.end} ${a.title}（${a.block ? '枠：' + a.block : '枠に紐づけなし'}）`))}${li(res.skipped.map(a => `スキップ：${a.date} ${a.title}`))}</ul>${note}`;
+}
+function importSettingsHtml() {
+  return `<div class="sect"><h4>記録の取り込み（MUSEなど、他のAIが「やったこと」を登録する）</h4>
+    <div class="empty" style="margin-bottom:6px">次の形のJSONを貼って「追加」。追加だけで、既存のデータは変えません（元に戻す：Ctrl+Z）。<code>{"source":"MUSE","records":[{"title":"作業名","date":"2026-11-15","start":"10:00","end":"10:40","did":["やったこと"]}]}</code>　date省略＝今日。終わった時刻だけ入れられます（未来の時刻は拒否）。重なる仕事の枠に自動で紐づけます。</div>
+    <div class="row"><textarea id="imp-text" rows="5" placeholder='{"source":"MUSE","records":[…]}'></textarea></div>
+    <div class="row"><label style="width:auto"><input type="checkbox" id="imp-push" checked> 追加したら、クラウドへ保存する</label><button class="btn btn-sm btn-primary" onclick="runImport()">追加</button></div>
+    <div id="imp-result" class="empty"></div></div>`;
+}
+
 // ───────── settings / gist ─────────
 function openSettings() {
   const tok = lsGet('sched_gist_token') || '', gid = lsGet('sched_gist_id') || '';
@@ -1604,6 +1674,7 @@ function openSettings() {
       <div class="row"><button class="btn btn-sm" onclick="saveGistSettings()">設定を保存</button><button class="btn btn-sm btn-primary" onclick="gistPush()">☁ 保存（アップロード）</button><button class="btn btn-sm" onclick="gistPull()">☁ 読み込み</button></div>
       <div class="empty">データは ${GIST_FILE} に保存します。旧TODOアプリのGist（todo_app_data.json）とは別のGistです。</div></div>
     ${openAiSettingsHtml()}
+    ${importSettingsHtml()}
     <div class="sect"><h4>テーマ（カンマ区切り）</h4><div class="row"><input id="st-themes" value="${h(S.themes.join(','))}"><button class="btn btn-sm" onclick="saveThemes()">保存</button></div></div>
     <div class="sect"><h4>作業枠テンプレート</h4>
       ${S.blockTemplates.map(t => `<div class="task-row"><span class="ttl">${h(t.title)} ${t.startTime}–${t.endTime} ${h(t.theme)}</span><button class="btn btn-sm" onclick="delTemplate('${t.id}')">削除</button></div>`).join('') || '<div class="empty">まだありません</div>'}
