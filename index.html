@@ -105,6 +105,10 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 .kind-seg { margin-bottom: 6px; }
 .search-in { width: 100%; padding: 5px 8px; margin-bottom: 6px; border: 1px solid var(--border); border-radius: 6px; font: inherit; }
 .rv-q { width: 100%; padding: 5px 8px; margin-bottom: 4px; border: 1px solid var(--border); border-radius: 6px; font: inherit; }
+.rv-rec { background: #f8fafc; border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; margin-bottom: 8px; font-size: 12px; }
+.rv-rec .lbl { color: var(--muted); margin-bottom: 2px; }
+.rv-rec-i { padding: 1px 0; }
+.rv-time { color: var(--muted); font-variant-numeric: tabular-nums; margin-right: 4px; }
 .rv-free { border: 1px dashed var(--border); border-radius: 6px; padding: 4px 8px; margin-bottom: 6px; }
 .rv-free > summary { cursor: pointer; font-size: 12px; color: var(--muted); padding: 4px 0; }
 #drag-tip { position: fixed; z-index: 100; background: #111827; color: #fff; padding: 3px 8px; border-radius: 4px; font-size: 12px; pointer-events: none; }
@@ -267,7 +271,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 
 <script>
 'use strict';
-const APP_VERSION = 'v2.1.0';
+const APP_VERSION = 'v2.2.0';
 const GIST_FILE = 'schedule_data.json';
 const DAY_START = 6, DAY_END = 23;       // 表示する時間帯
 // 拡大レベル：1時間の高さ(px)と、ドラッグの刻み(分)。拡大するほど細かく動かせる（Shift押下中は5分）
@@ -1494,6 +1498,8 @@ function renderReview() {
   const r = _rv, idx = r.items.map((it, i) => i), pIdx = idx.filter(i => r.items[i].promise), fIdx = idx.filter(i => !r.items[i].promise);
   const freeOpen = r.freeOpen || fIdx.some(i => r.items[i].exKind || r.items[i].relinked);   // 例外を入れた・付け替え済みの項目があれば、最初から開く
   openModal(`<h3>${fmtMD(r.date)} の振り返り<button class="btn btn-sm" onclick="closeModal()">✕</button></h3>
+    ${(() => { const rs = S.tasks.filter(t => t.record && t.completed && t.dueDate === r.date).sort((a, b) => ((recSpan(a) || {}).start || '').localeCompare((recSpan(b) || {}).start || ''));
+      return rs.length ? `<div class="rv-rec"><div class="lbl">この日の実績（取り込み・記録）${rs.length}件。見るだけです</div>${rs.map(t => { const sp = recSpan(t); return `<div class="rv-rec-i"><span class="rv-time">${sp ? sp.start + '–' + sp.end : ''}</span> ${h(t.title)}${t.source ? `<span class="rv-legacy">${h(t.source)}</span>` : ''}</div>`; }).join('')}</div>` : ''; })()}
     ${r.items.length ? '<div class="empty" style="margin-bottom:6px">約束タスク（意思◎〇）の入った枠だけ、確認します。何も入れなければ、計画どおりとして保存します</div>' : ''}
     ${pIdx.length ? pIdx.map(i => reviewItemHtml(r.items[i], i)).join('') : (r.items.length ? '<div class="empty">この日は、約束タスクの入った枠がありません</div>' : '<div class="empty">この日の振り返り対象（テーマ付きの予定）がありません。一言だけでも保存できます</div>')}
     ${fIdx.length ? `<details class="rv-free" ${freeOpen ? 'open' : ''} ontoggle="_rv.freeOpen=this.open"><summary>自由枠の例外を記録する（付け替え・突発・小物）　${fIdx.length}枠</summary>${fIdx.map(i => reviewItemHtml(r.items[i], i)).join('')}</details>` : ''}
@@ -1618,9 +1624,41 @@ function parseImportRecords(text) {
     else if (date === today() && toMin(en) > nowMin) errs.push(p + `endが現在時刻（${fromMin(nowMin)}）より未来です。実際に終えた時刻を入れてください`);   // 見込み時刻の混入を止める（register_session_task.py と同じ）
     const did = r.did === undefined || r.did === null ? [] : Array.isArray(r.did) ? r.did : [r.did];
     if (did.length > IMP_MAX.did || did.some(d => typeof d !== 'string' || d.length > IMP_MAX.didLen)) errs.push(p + `didは文字列${IMP_MAX.did}個まで、1つ${IMP_MAX.didLen}文字までです`);
-    if (errs.length === e0) recs.push({ title, date, start: st, end: en, did: did.map(d => d.trim()).filter(Boolean) });
+    const kind = r.kind === undefined || r.kind === null || r.kind === '' ? 'work' : String(r.kind);
+    if (kind !== 'work' && kind !== 'private') errs.push(p + 'kindは "work"（仕事）か "private"（プライベート）です');
+    if (errs.length === e0) recs.push({ title, date, start: st, end: en, kind, did: did.map(d => d.trim()).filter(Boolean) });
   });
   return { recs: errs.length ? [] : recs, source, errs };
+}
+// 記録のタスクを、枠に紐づける。同じ区分（仕事／プライベート）の枠で、時間が重なるもののうち、重なりが最も大きい枠へ。
+// 重なる枠が無ければ、記録の時間帯どおりの「確定」の枠を新しく作る（テーマは付けない＝ICS・会社Outlookには出ない。日表示・月表示には出る）。作った枠には record:true・source を付ける
+function linkRecordToBlock(t, r) {
+  const s = toMin(r.start), e = toMin(r.end), min = e - s, kind = r.kind === 'private' ? 'private' : 'work';
+  const ov = b => Math.min(e, toMin(b.endTime)) - Math.max(s, toMin(b.startTime));
+  // 時間が重なる枠は、区分を問わず対象にする（プライベートの枠にも、仕事の記録を紐づけられる）。ただし、同じ区分の枠があれば、そちらを先に選ぶ
+  const hits = blocksOn(r.date).filter(b => toMin(b.startTime) < e && toMin(b.endTime) > s);
+  const best = list => list.length ? list.reduce((a, b) => ov(b) > ov(a) ? b : a) : null;
+  let link = best(hits.filter(b => kindOf(b) === kind)) || best(hits), created = false;
+  if (!link) {
+    link = { id: uuid(), title: t.title, theme: '', date: r.date, startTime: r.start, endTime: r.end, recurrence: null, recurrenceEnd: null, status: 'confirmed', createdAt: t.createdAt || new Date().toISOString(), record: true };
+    if (kind === 'private') link.kind = 'private';
+    if (t.source) link.source = t.source;
+    S.blocks.push(link); created = true;
+  }
+  t.blockIds = [link.id]; t.alloc = { [link.id]: min };
+  return { hits, link, created };
+}
+// 記録のタスクの時間帯（memoの先頭「HH:MM〜HH:MM（N分）」から読む）
+const REC_TIME = /^(\d{2}:\d{2})〜(\d{2}:\d{2})（(\d+)分）/;
+const recSpan = t => { const m = REC_TIME.exec(t.memo || ''); return m ? { start: m[1], end: m[2] } : null; };
+// v2.1.0で取り込んだ、枠に紐づいていない記録（source付き）に、枠を作って紐づける
+function repairUnlinkedRecords() {
+  const todo = S.tasks.filter(t => t.record && t.source && t.completed && t.dueDate && !(t.blockIds || []).some(id => blockById(id)) && recSpan(t));
+  const out = document.getElementById('imp-result');
+  if (!todo.length) { out.textContent = '枠に紐づいていない取り込み記録はありません'; return; }
+  const done = todo.map(t => { const sp = recSpan(t), pl = linkRecordToBlock(t, { date: t.dueDate, start: sp.start, end: sp.end, kind: kindOf(t) }); return `${t.dueDate} ${sp.start}–${sp.end} ${t.title}（${pl.created ? '枠を作成' : '枠：' + (pl.link.title || '作業枠')}）`; });
+  save(); renderAll();
+  out.innerHTML = `<b>${todo.length}件を枠に紐づけました</b>（「今すぐ保存」でクラウドへ）<ul>${done.map(x => `<li>${h(x)}</li>`).join('')}</ul>`;
 }
 // 追加する。戻り値：{errs, added[], skipped[]}。1回の追加は、元に戻す1回分にまとまる
 function importRecords(text) {
@@ -1629,15 +1667,14 @@ function importRecords(text) {
   const added = [], skipped = [], nowIso = new Date().toISOString();
   recs.forEach(r => {
     if (S.tasks.some(t => t.title === r.title && t.dueDate === r.date && t.completed)) { skipped.push(r); return; }   // 同じ日・同じ名前の完了タスクは、二重に追加しない
-    const s = toMin(r.start), e = toMin(r.end), min = e - s;
-    const hits = blocksOn(r.date).filter(b => kindOf(b) === 'work' && toMin(b.startTime) < e && toMin(b.endTime) > s);
-    const link = hits.length ? hits.reduce((a, b) => (Math.min(e, toMin(b.endTime)) - Math.max(s, toMin(b.startTime))) > (Math.min(e, toMin(a.endTime)) - Math.max(s, toMin(a.startTime))) ? b : a) : null;   // 重なりが最も大きい仕事の枠
-    const memo = [`${r.start}〜${r.end}（${min}分）`, ...(hits.length ? ['重なる枠：' + hits.map(b => b.title || '作業枠').join('、')] : []), ...r.did].join('。');
+    const min = toMin(r.end) - toMin(r.start);
     const t = { id: uuid(), title: r.title, dueDate: r.date, priority: 'medium', scale: scaleFromMin(min), estimateH: Math.round(min / 60 * 10000) / 10000, week: weekStart(r.date),
-      completed: true, completedAt: nowIso, record: true, blockIds: link ? [link.id] : [], memo, createdAt: nowIso };
+      completed: true, completedAt: nowIso, record: true, blockIds: [], createdAt: nowIso };
     if (source) t.source = source;
-    if (link) t.alloc = { [link.id]: min };
-    S.tasks.push(t); added.push({ ...r, block: link ? (link.title || '作業枠') : null });
+    if (r.kind === 'private') t.kind = 'private';
+    const pl = linkRecordToBlock(t, r);
+    t.memo = [`${r.start}〜${r.end}（${min}分）`, ...(pl.hits.length ? ['重なる枠：' + pl.hits.map(b => b.title || '作業枠').join('、')] : []), ...r.did].join('。');
+    S.tasks.push(t); added.push({ ...r, block: pl.link.title || '作業枠', created: pl.created });
   });
   if (added.length) { save(); renderAll(); }
   return { errs: [], added, skipped };
@@ -1652,13 +1689,14 @@ async function runImport() {
     if (lsGet('sched_gist_token') && lsGet('sched_gist_id')) { await gistPush(); note = _dirty ? '<br>クラウドへの保存は完了していません（上の通知を確認してください）' : '<br>クラウドに保存しました'; }
     else note = '<br>トークン・Gist IDが未設定のため、クラウドへは保存していません';
   } else if (res.added.length) note = '<br>クラウドへは保存していません（「今すぐ保存」で保存します）';
-  out.innerHTML = `<b>${res.added.length}件を追加しました</b>${res.skipped.length ? `（${res.skipped.length}件は、同じ日・同じ名前の記録済みのためスキップ）` : ''}<ul>${li(res.added.map(a => `${a.date} ${a.start}–${a.end} ${a.title}（${a.block ? '枠：' + a.block : '枠に紐づけなし'}）`))}${li(res.skipped.map(a => `スキップ：${a.date} ${a.title}`))}</ul>${note}`;
+  out.innerHTML = `<b>${res.added.length}件を追加しました</b>${res.skipped.length ? `（${res.skipped.length}件は、同じ日・同じ名前の記録済みのためスキップ）` : ''}<ul>${li(res.added.map(a => `${a.date} ${a.start}–${a.end} ${a.title}（${a.created ? '枠を新しく作成' : '枠：' + a.block}）`))}${li(res.skipped.map(a => `スキップ：${a.date} ${a.title}`))}</ul>${note}`;
 }
 function importSettingsHtml() {
   return `<div class="sect"><h4>記録の取り込み（MUSEなど、他のAIが「やったこと」を登録する）</h4>
-    <div class="empty" style="margin-bottom:6px">次の形のJSONを貼って「追加」。追加だけで、既存のデータは変えません（元に戻す：Ctrl+Z）。<code>{"source":"MUSE","records":[{"title":"作業名","date":"2026-11-15","start":"10:00","end":"10:40","did":["やったこと"]}]}</code>　date省略＝今日。終わった時刻だけ入れられます（未来の時刻は拒否）。重なる仕事の枠に自動で紐づけます。</div>
+    <div class="empty" style="margin-bottom:6px">次の形のJSONを貼って「追加」。追加だけで、既存のデータは変えません（元に戻す：Ctrl+Z）。<code>{"source":"MUSE","records":[{"title":"作業名","date":"2026-11-15","start":"10:00","end":"10:40","did":["やったこと"]}]}</code>　date省略＝今日。終わった時刻だけ入れられます（未来の時刻は拒否）。重なる枠（区分が違う枠も対象。同じ区分を優先）に自動で紐づけ、無ければ時間帯どおりの枠を作ります。<code>"kind":"private"</code>でプライベート（省略＝仕事）。</div>
     <div class="row"><textarea id="imp-text" rows="5" placeholder='{"source":"MUSE","records":[…]}'></textarea></div>
     <div class="row"><label style="width:auto"><input type="checkbox" id="imp-push" checked> 追加したら、クラウドへ保存する</label><button class="btn btn-sm btn-primary" onclick="runImport()">追加</button></div>
+    <div class="row"><button class="btn btn-sm" onclick="repairUnlinkedRecords()" title="以前の取り込みで、枠に紐づかなかった記録に、時間帯どおりの枠を作ります">枠に紐づいていない取り込み記録を、枠に紐づける</button></div>
     <div id="imp-result" class="empty"></div></div>`;
 }
 
