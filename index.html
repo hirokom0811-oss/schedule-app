@@ -103,6 +103,10 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 .th-none { background: #fff; border-color: var(--border); }
 .blk.priv, .month .chip.priv { background: #f5f3ff; border-color: #c4b5fd; }   /* プライベートの枠（仕事の枠と見分ける。ICSには出ない） */
 .kind-seg { margin-bottom: 6px; }
+.search-in { width: 100%; padding: 5px 8px; margin-bottom: 6px; border: 1px solid var(--border); border-radius: 6px; font: inherit; }
+.rv-q { width: 100%; padding: 5px 8px; margin-bottom: 4px; border: 1px solid var(--border); border-radius: 6px; font: inherit; }
+.rv-free { border: 1px dashed var(--border); border-radius: 6px; padding: 4px 8px; margin-bottom: 6px; }
+.rv-free > summary { cursor: pointer; font-size: 12px; color: var(--muted); padding: 4px 0; }
 #drag-tip { position: fixed; z-index: 100; background: #111827; color: #fff; padding: 3px 8px; border-radius: 4px; font-size: 12px; pointer-events: none; }
 .nowline { position: absolute; left: 0; right: 0; border-top: 2px solid #ef4444; z-index: 3; pointer-events: none; }
 
@@ -254,7 +258,8 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 <main>
   <div id="cal-wrap"><div id="cal"></div></div>
   <aside id="side">
-    <div class="card"><h2><span>候補（優先順）</span><span><span class="empty" id="task-count"></span> <button class="btn btn-sm" onclick="openTaskEdit(null)">＋追加</button></span></h2><div id="tasks"></div></div>
+    <div class="card"><h2><span>候補（優先順）</span><span><span class="empty" id="task-count"></span> <button class="btn btn-sm" onclick="openTaskEdit(null)">＋追加</button></span></h2>
+      <input id="cand-q" class="search-in" type="search" placeholder="タスクを検索（名前の一部）" oninput="setCandQ(this.value)"><div id="tasks"></div></div>
   </aside>
 </main>
 <div id="modal-bg"><div class="modal" id="modal"></div></div>
@@ -262,7 +267,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 
 <script>
 'use strict';
-const APP_VERSION = 'v0.10.4';
+const APP_VERSION = 'v2.0.0';
 const GIST_FILE = 'schedule_data.json';
 const DAY_START = 6, DAY_END = 23;       // 表示する時間帯
 // 拡大レベル：1時間の高さ(px)と、ドラッグの刻み(分)。拡大するほど細かく動かせる（Shift押下中は5分）
@@ -547,7 +552,9 @@ function unlinkTask(taskId, blockId) {
 function renderAll() {
   document.getElementById('ver').textContent = APP_VERSION;
   document.querySelectorAll('#view-seg button').forEach(b => b.classList.toggle('active', b.dataset.view === S.view));
-  renderCalendar(); renderSide(); updateTitle(); updateZoomLabel();
+  // ボタン類（振り返り・確定など）の表示を先に更新し、カレンダーや候補の描画でエラーが出ても、ボタンが消えたままにならないようにする
+  const safe = (name, fn) => { try { fn(); } catch (e) { console.error('描画エラー: ' + name, e); if (!renderAll._warned) { renderAll._warned = true; showToast('表示でエラーが出ました（' + name + '）。再読込してください'); } } };
+  safe('ボタン', updateTitle); safe('拡大', updateZoomLabel); safe('カレンダー', renderCalendar); safe('候補', renderSide);
 }
 function updateTitle() {
   let t = '';
@@ -857,11 +864,33 @@ function parentRowHtml(t, i, noRank) {
     <span class="ttl" title="${h(t.title)}" onclick="openTaskEdit('${t.id}')">${h(t.title)}</span><span class="parent-tag">まとめ</span></div>
     <div class="cand-sub ${dueOver(t) ? 'over' : ''}">${h(sub.join('　'))} <a href="#" onclick="openDecompose('${t.id}');return false">子を足す</a> <a href="#" onclick="openTaskEdit('${t.id}');return false">編集</a></div></div>`;
 }
-function candidateRowsHtml(list, limit, noRank) {
-  const shown = limit ? list.slice(0, limit) : list;
-  return shown.map((t, i) => isParent(t)
-    ? parentRowHtml(t, i, noRank) + childrenOf(t).filter(isOpenCandidate).map(c => candRowHtml(c, 0, true, true)).join('')
-    : candRowHtml(t, i, noRank, false)).join('') + (limit && list.length > limit ? `<div class="empty">他${list.length - limit}件（上の「候補」ボタンで、すべて見られます）</div>` : '');
+// ── タスク検索（名前の部分一致。全角半角・大文字小文字・余分な空白は区別しない）──
+let _candQ = '';                                                  // 候補の欄・候補の一覧で共通の検索語（保存しない）
+const normQ = s => String(s ?? '').normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim();
+const titleHit = (t, q) => !q || normQ(t.title).includes(q);
+// 親（まとめ）の下に出す子：検索中は、親の名前が当たれば子ぜんぶ、当たらなければ名前の当たった子だけ
+const shownKids = (t, q) => childrenOf(t).filter(isOpenCandidate).filter(c => !q || titleHit(t, q) || titleHit(c, q));
+const candHit = (t, q) => !q || titleHit(t, q) || (isParent(t) && shownKids(t, q).length > 0);
+// 画面に出る行（子・単独）の数。タブの件数に使う
+const shownLeafCount = (list, q) => list.filter(t => candHit(t, q)).reduce((n, t) => n + (isParent(t) ? shownKids(t, q).length : 1), 0);
+function setCandQ(v) {
+  _candQ = v;
+  const a = document.getElementById('cand-q'), b = document.getElementById('cand-q-m');
+  if (a && a.value !== v) a.value = v;
+  if (b && b.value !== v) b.value = v;
+  renderSide();
+  const ml = document.getElementById('cand-m-list');
+  if (ml && _candCtx) ml.innerHTML = candidatesPanelHtml(0);        // 入力欄は描き直さない（打っている途中で、カーソルが外れないように）
+}
+function candidateRowsHtml(list, limit, noRank, q) {
+  q = q || '';
+  const rankOf = new Map(list.map((t, i) => [t.id, i]));          // 順位の数字は、絞り込む前の並びのもの（検索で、数字が振り直されないように）
+  const hit = list.filter(t => candHit(t, q));
+  const shown = limit ? hit.slice(0, limit) : hit;
+  return shown.map(t => { const i = rankOf.get(t.id);
+    return isParent(t)
+      ? parentRowHtml(t, i, noRank) + shownKids(t, q).map(c => candRowHtml(c, 0, true, true)).join('')
+      : candRowHtml(t, i, noRank, false); }).join('') + (limit && hit.length > limit ? `<div class="empty">他${hit.length - limit}件（上の「候補」ボタンで、すべて見られます）</div>` : '');
 }
 // 候補の1行（child＝親の下に字下げして出す子）
 function candRowHtml(t, i, noRank, child) {
@@ -889,9 +918,11 @@ const weekRangeLabel = ws => `${fmtMD(ws)}〜${fmtMD(addDays(ws, 6))}`;
 // 候補の欄・候補の一覧（モーダル）の中身。確定した週は畳む。week が無いタスクは、下の節に出す
 // 仕事／プライベートの切り替え。件数は、この週の未配置（確定した週は0）
 function kindTabsHtml() {
-  const ws = viewWeek();
-  const cnt = k => weekHidden(ws, k) ? 0 : unplacedCount(rankedOpenTasks(k));
-  return `<div class="seg kind-seg">${['work', 'private'].map(k => `<button class="${VIEW_KIND === k ? 'active' : ''}" onclick="setKind('${k}')">${KIND_LABEL[k]} ${cnt(k)}</button>`).join('')}</div>`;
+  // 件数は「その区分の欄に、いま出ている行（配置済みも、週の指定なしも含む）」の数。以前は、未配置（この週）だけを数えていて、行が出ているのに0になることがあった
+  const ws = viewWeek(), q = normQ(_candQ);
+  const cnt = k => (weekHidden(ws, k) ? 0 : shownLeafCount(rankedOpenTasks(k), q)) + shownLeafCount(undatedOpenTasks(k), q);
+  const tip = k => { const wk = weekHidden(ws, k) ? [] : leavesOf(rankedOpenTasks(k)), un = unplacedCount(rankedOpenTasks(k)); return weekHidden(ws, k) ? `この週は確定済みで、候補を隠しています` : `この週の未配置${un}件・配置済み${wk.length - un}件`; };
+  return `<div class="seg kind-seg">${['work', 'private'].map(k => `<button class="${VIEW_KIND === k ? 'active' : ''}" title="${h(tip(k))}" onclick="setKind('${k}')">${KIND_LABEL[k]} ${cnt(k)}</button>`).join('')}</div>`;
 }
 function setKind(k) {
   VIEW_KIND = k === 'private' ? 'private' : 'work'; lsSet('sched_kind', VIEW_KIND);
@@ -903,8 +934,10 @@ function candidatesPanelHtml(limit) {
   let html = kindTabsHtml();
   if (confirmed) html += `<div class="confirmed-note">この週（${weekRangeLabel(ws)}）の${KIND_LABEL[VIEW_KIND]}は確定済みです。候補${open.length}件を${hidden ? '非表示にしています' : '表示しています'}。
     <a href="#" onclick="toggleWeekCandidates('${ws}');return false">${hidden ? '候補を表示' : '候補を隠す'}</a>　<a href="#" onclick="unconfirmWeek('${ws}');return false">確定を取り消す</a></div>`;
-  if (!hidden) html += open.length ? candidateRowsHtml(open, limit) : '<div class="empty">この週の候補はありません（タスクの「対象の週」が、この週のものを出します）</div>';
-  if (undated.length) html += `<div class="undated-h">週の指定なし（${undated.length}件）</div>` + candidateRowsHtml(undated, limit ? 10 : 0, true);
+  const q = normQ(_candQ), nOpen = shownLeafCount(open, q), nUn = shownLeafCount(undated, q);
+  if (!hidden) html += open.length ? (nOpen ? candidateRowsHtml(open, limit, false, q) : `<div class="empty">この週の候補に、「${h(_candQ.trim())}」を含むタスクはありません</div>`) : '<div class="empty">この週の候補はありません（タスクの「対象の週」が、この週のものを出します）</div>';
+  else if (q) html += '<div class="empty">確定済みの週の候補は、隠しているので検索に出ません（「候補を表示」で出せます）</div>';
+  if (undated.length && nUn) html += `<div class="undated-h">週の指定なし（${q ? nUn + '/' : ''}${leavesOf(undated).length}件）</div>` + candidateRowsHtml(undated, limit ? 10 : 0, true, q);
   return html;
 }
 function toggleWeekCandidates(ws) {
@@ -939,7 +972,8 @@ function openCandidates() {
   const ws = viewWeek(), open = rankedOpenTasks(), hidden = weekHidden(ws);
   openModal(`<h3>候補（優先順）<span><button class="btn btn-sm" onclick="openTaskEdit(null)">＋追加</button> <button class="btn btn-sm" onclick="closeModal()">✕</button></span></h3>
     <div class="empty" style="margin-bottom:6px"><b>${weekRangeLabel(ws)}</b>　${hidden ? '確定済み' : countLabel(open)}。上ほど優先です。「配置」を押して、入れる枠を選びます。配置済みのタスクは、日時が出ます（押すと、その枠を開く）。週は、カレンダーで切り替えます。</div>
-    ${candidatesPanelHtml(0)}`);
+    <input id="cand-q-m" class="search-in" type="search" placeholder="タスクを検索（名前の一部）" value="${h(_candQ)}" oninput="setCandQ(this.value)">
+    <div id="cand-m-list">${candidatesPanelHtml(0)}</div>`);
 }
 
 // ───────── rule-based suggestion (イ) ─────────
@@ -970,10 +1004,13 @@ document.getElementById('modal-bg').addEventListener('mousedown', e => { if (e.t
 
 // ───────── block modal ─────────
 let _bm = null; // {id, viewDate}
-function openBlock(id, date, start, end) {
+// draft＝入力途中だったフォームの値（readBlockForm の形）。あれば、保存済みの値より優先して、入力欄に入れ直す
+let _bmDraft = null;   // {blockId, data}：タスク編集を開く間、枠のダイアログの入力内容を預かる
+function openBlock(id, date, start, end, draft) {
   _bm = { id, viewDate: date };
-  const b = id ? blockById(id) : { title: '', theme: '', date, startTime: start || '09:00', endTime: end || '10:00', recurrence: null, recurrenceEnd: null, status: 'draft', kind: VIEW_KIND === 'private' ? 'private' : undefined };
+  let b = id ? blockById(id) : { title: '', theme: '', date, startTime: start || '09:00', endTime: end || '10:00', recurrence: null, recurrenceEnd: null, status: 'draft', kind: VIEW_KIND === 'private' ? 'private' : undefined };
   if (!b) return;
+  if (draft) b = { ...b, ...draft };                       // 枠そのものは変えない（表示用の複製）。kind が undefined（＝仕事）の入力も、そのまま反映する
   const priv = kindOf(b) === 'private';
   const themeOpts = ['', ...S.themes].map(t => `<option value="${h(t)}" ${t === b.theme ? 'selected' : ''}>${t || '（なし）'}</option>`).join('');
   const tplOpts = '<option value="">テンプレートから…</option>' + S.blockTemplates.map(t => `<option value="${t.id}">${h(t.title)} ${t.startTime}–${t.endTime}</option>`).join('');
@@ -1054,13 +1091,23 @@ function toggleTask(id) { const t = taskById(id); if (!t) return; t.completed = 
 function unlinkFromModal(taskId) { unlinkTask(taskId, _bm.id); renderAll(); reopenBlock(); }
 function addTaskFromModal() { const v = document.getElementById('bm-addtask').value; if (!v) return; if (!placeInBlock(v, _bm.id)) return; renderAll(); reopenBlock(); }
 function linkFromSuggest(taskId) { if (!placeInBlock(taskId, _bm.id)) return; renderAll(); reopenBlock(); }
-function reopenBlock() { if (_bm && _bm.id) openBlock(_bm.id, _bm.viewDate); }
+// 描き直す前に、入力途中の内容（名前・時間・繰り返しなど）を読み取って、入れ直す。以前は、タスクのチェック・外す・追加のたびに、入力が保存済みの値に戻っていた
+function reopenBlock() {
+  if (!(_bm && _bm.id)) return;
+  openBlock(_bm.id, _bm.viewDate, undefined, undefined, document.getElementById('bm-title') ? readBlockForm() : null);
+}
 
 // ───────── task edit modal（追加・編集・削除）─────────
 let _te = null;
 let _teBack = null;   // 枠のダイアログから開いたときの戻り先 {blockId, viewDate}。保存・キャンセル・削除のあと、その枠のダイアログへ戻る
-function editTaskFromBlock(taskId) { openTaskEdit(taskId, { blockId: _bm.id, viewDate: _bm.viewDate }); }
-function backToBlock() { const b = _teBack; _teBack = null; if (b && blockById(b.blockId)) openBlock(b.blockId, b.viewDate); else closeModal(); }
+function editTaskFromBlock(taskId) {
+  _bmDraft = document.getElementById('bm-title') ? { blockId: _bm.id, data: readBlockForm() } : null;   // 枠の入力途中の内容を預かる
+  openTaskEdit(taskId, { blockId: _bm.id, viewDate: _bm.viewDate });
+}
+function backToBlock() {
+  const b = _teBack, dr = _bmDraft; _teBack = null; _bmDraft = null;
+  if (b && blockById(b.blockId)) openBlock(b.blockId, b.viewDate, undefined, undefined, dr && dr.blockId === b.blockId ? dr.data : null); else closeModal();
+}
 function openTaskEdit(id, back) {
   _te = id; _teBack = back || null;
   const t = id ? taskById(id) : { title: '', intent: '', estimateH: null, split: '', dueDate: '', rank: null, scale: 'medium', priority: 'medium', week: viewWeek(), kind: VIEW_KIND === 'private' ? 'private' : undefined };
@@ -1070,7 +1117,7 @@ function openTaskEdit(id, back) {
   const allocRow = bk && (t.blockIds || []).includes(bk.id)
     ? `<div class="row"><label>この枠の分数</label><input id="te-alloc" type="number" step="1" min="1" inputmode="numeric" value="${allocOf(t, bk.id) === null ? '' : allocOf(t, bk.id)}" placeholder="空欄＝見積どおり（${taskMin(t)}分）"><span class="empty">「${h(bk.title || '作業枠')}」${bk.startTime}–${bk.endTime} に入れた分</span></div>` : '';
   openModal(`<h3>${id ? 'タスクを編集' : 'タスクを追加'}<button class="btn btn-sm" onclick="cancelTaskEdit()">✕</button></h3>
-    ${bk ? `<div class="empty" style="margin-bottom:6px">枠のダイアログから開きました。保存・キャンセルで、その枠へ戻ります（枠のダイアログで入力中だった内容は、消えています）</div>` : ''}
+    ${bk ? `<div class="empty" style="margin-bottom:6px">枠のダイアログから開きました。保存・キャンセルで、その枠へ戻ります（枠のダイアログで入力中だった内容は、そのまま戻ります）</div>` : ''}
     ${parentOf(t) ? `<div class="row"><label>親</label><span>${h(parentOf(t).title)}</span></div>` : ''}
     <div class="row"><label>名前</label><input id="te-title" value="${h(t.title)}" placeholder="例：資料の下書き"></div>
     <div class="row"><label>区分</label><select id="te-kind">${sel(kindOf(t), [['work', '仕事'], ['private', 'プライベート']])}</select><span class="empty">プライベートは、プライベートの枠にだけ入ります</span></div>
@@ -1342,10 +1389,16 @@ function openReview() {
   const ds = S.cur;
   const existing = S.reviews.find(r => r.date === ds);
   const items = [];
+  // 出す枠：
+  //  ・約束タスク（意思◎〇）が紐づいた枠 → 約束タスクごとに1項目（○×は任意。未入力＝計画どおり）
+  //  ・それ以外の自由枠 → 「例外」（付け替え・突発・小物）の記録欄だけ。繰り返しの枠（定型枠）は出さない
   blocksOn(ds).filter(b => b.theme && !isPrivBlock(b)).forEach(b => {
-    const ts = blockTasks(b.id);
-    if (ts.length) ts.forEach(t => items.push({ blockId: b.id, taskId: t.id, title: t.title, slot: `${b.startTime}–${b.endTime}` }));
-    else items.push({ blockId: b.id, taskId: null, title: b.title || '作業枠', slot: `${b.startTime}–${b.endTime}` });
+    const ts = blockTasks(b.id), slot = `${b.startTime}–${b.endTime}`, pts = ts.filter(t => isPromiseTask(t.id));
+    if (pts.length) pts.forEach(t => items.push({ blockId: b.id, taskId: t.id, title: t.title, slot }));
+    else if (!b.recurrence) {
+      if (ts.length) ts.forEach(t => items.push({ blockId: b.id, taskId: t.id, title: t.title, slot }));
+      else items.push({ blockId: b.id, taskId: null, title: b.title || '作業枠', slot });
+    }
   });
   items.forEach(it => {
     const prev = existing && existing.items.find(x => x.blockId === it.blockId && x.taskId === it.taskId);
@@ -1380,6 +1433,13 @@ function reviewOptHtml(t) {
   return `<span class="rankno ${typeof t.rank === 'number' ? '' : 'none'}">${typeof t.rank === 'number' ? t.rank : ''}</span>${t.intent ? `<span class="intent i${t.intent === '◎' ? '1' : '2'}">${h(t.intent)}</span>` : ''}`
     + `<span class="ttl">${t.completed ? '✓ ' : ''}${parentOf(t) ? `<span class="rv-par">${h(parentOf(t).title)} › </span>` : ''}${h(t.title)}</span>${meta ? `<span class="rv-meta">${meta}</span>` : ''}`;
 }
+// 選択肢の一覧の中身。検索語があれば、名前（子は親の名前も）の部分一致で絞る。選んだ印（it.done）は、絞り込みで消えない
+function reviewListInner(it, i) {
+  const q = normQ(it.q), cs = reviewChoices(it).filter(t => !q || normQ(t.title).includes(q) || (parentOf(t) && normQ(parentOf(t).title).includes(q)));
+  return cs.length ? cs.map(t => `<label class="rv-opt ${it.done.includes(t.id) ? 'on' : ''}" title="${h(t.title)}"><input type="checkbox" ${it.done.includes(t.id) ? 'checked' : ''} onchange="toggleDone(${i},'${t.id}',this)">${reviewOptHtml(t)}</label>`).join('')
+    : `<div class="empty" style="padding:6px 8px">「${h((it.q || '').trim())}」を含むタスクはありません</div>`;
+}
+function rvSearch(i, v) { const it = _rv.items[i]; it.q = v; const el = document.getElementById('rv-list-' + i); if (el) el.innerHTML = reviewListInner(it, i); }
 function reviewDoneHtml(it, i) {
   if (it.relinked) {
     const names = (it.relinked.addedIds || []).map(id => taskById(id)?.title || '（削除済み）');
@@ -1389,7 +1449,7 @@ function reviewDoneHtml(it, i) {
   if (!wantsRelink(it)) return '';
   const cs = reviewChoices(it);
   return `<div class="rv-done"><div class="lbl">実際にやったタスク（保存すると、この枠のタスクを付け替えます）</div>${cs.length
-    ? `<div class="rv-list">${cs.map(t => `<label class="rv-opt ${it.done.includes(t.id) ? 'on' : ''}" title="${h(t.title)}"><input type="checkbox" ${it.done.includes(t.id) ? 'checked' : ''} onchange="toggleDone(${i},'${t.id}',this)">${reviewOptHtml(t)}</label>`).join('')}</div><div class="rv-sel" id="rv-sel-${i}">${it.done.length}件選択中</div>`
+    ? `<input class="rv-q" type="search" placeholder="タスクを検索（名前の一部）" value="${h(it.q || '')}" oninput="rvSearch(${i},this.value)"><div class="rv-list" id="rv-list-${i}">${reviewListInner(it, i)}</div><div class="rv-sel" id="rv-sel-${i}">${it.done.length}件選択中</div>`
     : '<div class="empty">この週の候補がありません（タスクの「対象の週」が、この週のものを出します）</div>'}
     <div class="rv-new"><input class="n-t" placeholder="候補にないタスクを、新しく追加" value="${h(it.newTitle || '')}" oninput="_rv.items[${i}].newTitle=this.value">
       <input class="n-e" type="number" step="0.25" min="0" inputmode="decimal" placeholder="見積(h)" value="${h(it.newEst || '')}" oninput="_rv.items[${i}].newEst=this.value">
@@ -1418,24 +1478,25 @@ const RV_MARK = { good: '○', partial: '△', bad: '×' };
 function reviewItemHtml(it, i) {
   const inp = 'style="width:100%;padding:5px 7px;border:1px solid var(--border);border-radius:6px;font:inherit"';
   if (it.promise) {
-    // 約束枠：○か×を選ばないと保存できない（○＝手を付けた／×＝手を付けず）。△は選べない（過去の記録で△のものは、印だけ残す）
+    // 約束枠：○×は任意。何も選ばなければ「計画どおり」として扱う（○＝手を付けた／×＝手を付けず）。△は選べない（過去の記録で△のものは、印だけ残す）
     const legacy = it.result === 'partial' ? `<span class="rv-legacy">以前の記録：△</span>` : '';
-    return `<div class="rv-item ${it.missing ? 'rv-missing' : ''}"><div class="rt"><span class="rv-tag">約束</span>${it.slot} ${h(it.title)}</div>
-      <div class="rv-btns">${[['good', '○'], ['bad', '×']].map(([v, l]) => `<button class="btn ${it.result === v ? 'sel-' + v : ''}" onclick="setResult(${i},'${v}')">${l}</button>`).join('')}${legacy}<span class="rv-hint">○＝手を付けた／×＝手を付けず</span></div>
+    return `<div class="rv-item"><div class="rt"><span class="rv-tag">約束</span>${it.slot} ${h(it.title)}</div>
+      <div class="rv-btns">${[['good', '○'], ['bad', '×']].map(([v, l]) => `<button class="btn ${it.result === v ? 'sel-' + v : ''}" onclick="setResult(${i},'${v}')">${l}</button>`).join('')}${legacy}<span class="rv-hint">未選択＝計画どおり／×＝手を付けず（付け替えを選べます）</span></div>
       <input ${inp} placeholder="理由（任意）" value="${h(it.comment)}" oninput="_rv.items[${i}].comment=this.value">${reviewDoneHtml(it, i)}</div>`;
   }
-  // 約束枠でない枠：○△×は出さない。一言と、例外（付け替え／突発／小物）だけ。過去の記録に○△×があれば、印だけ見せる
+  // 自由枠（約束タスクの入っていない枠）：○×も一言も出さない。例外（付け替え／突発／小物）の記録欄だけ。過去の記録の○△×・一言は、保存しても消えない（印だけ見せる）
   const old = it.result ? `<span class="rv-legacy">以前の記録：${RV_MARK[it.result]}</span>` : '';
   return `<div class="rv-item"><div class="rt">${it.slot} ${h(it.title)}${old}</div>
-    <input ${inp} placeholder="一言（任意）" value="${h(it.comment)}" oninput="_rv.items[${i}].comment=this.value">
     <div class="rv-btns rv-ex"><span class="rv-hint">例外</span>${RV_EX.map(([v, l]) => `<button class="btn btn-sm ${it.exKind === v ? 'sel-ex' : ''}" onclick="setEx(${i},'${v}')">${l}</button>`).join('')}</div>
     ${it.exKind === 'sudden' || it.exKind === 'minor' ? `<input ${inp} placeholder="${it.exKind === 'sudden' ? '突発：何が入ったか（1行）' : '小物：何をしたか（1行）'}" value="${h(it.exText)}" oninput="_rv.items[${i}].exText=this.value">` : ''}${reviewDoneHtml(it, i)}</div>`;
 }
 function renderReview() {
-  const r = _rv, np = r.items.filter(it => it.promise).length;
+  const r = _rv, idx = r.items.map((it, i) => i), pIdx = idx.filter(i => r.items[i].promise), fIdx = idx.filter(i => !r.items[i].promise);
+  const freeOpen = r.freeOpen || fIdx.some(i => r.items[i].exKind || r.items[i].relinked);   // 例外を入れた・付け替え済みの項目があれば、最初から開く
   openModal(`<h3>${fmtMD(r.date)} の振り返り<button class="btn btn-sm" onclick="closeModal()">✕</button></h3>
-    ${r.items.length && !np ? '<div class="empty">この日は約束枠（意思◎〇のタスクが入った枠）がありません。○×は不要で、一言だけでも保存できます</div>' : ''}
-    ${r.items.map((it, i) => reviewItemHtml(it, i)).join('') || '<div class="empty">この日の振り返り対象（テーマ付きの予定）がありません。一言だけでも保存できます</div>'}
+    ${r.items.length ? '<div class="empty" style="margin-bottom:6px">約束タスク（意思◎〇）の入った枠だけ、確認します。何も入れなければ、計画どおりとして保存します</div>' : ''}
+    ${pIdx.length ? pIdx.map(i => reviewItemHtml(r.items[i], i)).join('') : (r.items.length ? '<div class="empty">この日は、約束タスクの入った枠がありません</div>' : '<div class="empty">この日の振り返り対象（テーマ付きの予定）がありません。一言だけでも保存できます</div>')}
+    ${fIdx.length ? `<details class="rv-free" ${freeOpen ? 'open' : ''} ontoggle="_rv.freeOpen=this.open"><summary>自由枠の例外を記録する（付け替え・突発・小物）　${fIdx.length}枠</summary>${fIdx.map(i => reviewItemHtml(r.items[i], i)).join('')}</details>` : ''}
     <div class="row"><label>一言</label><input value="${h(r.memo)}" oninput="_rv.memo=this.value"></div>
     <div class="foot"><span class="spacer"></span><button class="btn" onclick="closeModal()">キャンセル</button><button class="btn btn-primary" onclick="saveReview()">保存</button></div>`);
 }
@@ -1470,14 +1531,18 @@ function applyRelinks(r) {
 }
 function saveReview() {
   const r = _rv;
-  // 約束枠は、○か×（過去の記録の△は、そのままで可）を選ばないと保存できない。約束枠のない日は、何も強制しない
-  r.items.forEach(it => { it.missing = it.promise && !it.result; });
-  const miss = r.items.filter(it => it.missing);
-  if (miss.length) { renderReview(); showToast(`約束枠${miss.length}件に、○か×を付けてください`); return; }
+  // ○×は任意（未入力＝計画どおり。resultはnullのまま保存する）。強制しない
   const res = applyRelinks(r);
   const exOf = it => it.exKind ? { kind: it.exKind, text: it.exKind === 'relink' ? '' : (it.exText || '').trim() } : null;
-  const rec = { id: uuid(), date: r.date, items: r.items.map(it => ({ blockId: it.blockId, taskId: it.taskId, title: it.title, result: it.result, comment: it.comment,
-    doneTaskIds: (wantsRelink(it) || it.relinked) ? it.done : [], relinked: it.relinked || null, exception: exOf(it) })), memo: r.memo, createdAt: new Date().toISOString() };
+  // 約束タスクの項目は、未入力でも記録する（その日、確認した印）。自由枠は、何か入れた（例外・付け替え・以前の記録）ものだけ記録する
+  const keep = it => it.promise || it.relinked || it.exKind || it.result || (it.comment || '').trim();
+  const prevRec = S.reviews.find(x => x.date === r.date);
+  const key = x => x.blockId + '|' + (x.taskId || '');
+  const have = new Set(r.items.map(key));
+  // 今回の一覧に出なかった過去の記録（以前は全枠を出していたため、繰り返しの枠などに残っている）は、消さずに引き継ぐ
+  const carry = (prevRec ? prevRec.items : []).filter(x => !have.has(key(x)) && !x.relinked && blockById(x.blockId) && isBlockOnDate(blockById(x.blockId), r.date) && (x.result || x.comment || x.exception));
+  const rec = { id: uuid(), date: r.date, items: r.items.filter(keep).map(it => ({ blockId: it.blockId, taskId: it.taskId, title: it.title, result: it.result, comment: it.comment,
+    doneTaskIds: (wantsRelink(it) || it.relinked) ? it.done : [], relinked: it.relinked || null, exception: exOf(it) })).concat(carry), memo: r.memo, createdAt: new Date().toISOString() };
   const i = S.reviews.findIndex(x => x.date === r.date);
   if (i >= 0) { rec.id = S.reviews[i].id; S.reviews[i] = rec; } else S.reviews.push(rec);
   save(); closeModal(); renderAll();
