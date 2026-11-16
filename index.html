@@ -302,7 +302,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 
 <script>
 'use strict';
-const APP_VERSION = 'v2.3.0';
+const APP_VERSION = 'v2.3.1';
 const GIST_FILE = 'schedule_data.json';
 const DAY_START = 6, DAY_END = 23;       // 表示する時間帯
 // 拡大レベル：1時間の高さ(px)と、ドラッグの刻み(分)。拡大するほど細かく動かせる（Shift押下中は5分）
@@ -653,17 +653,24 @@ function earliestKey(t) {
   const ks = depLeaves(t).flatMap(x => taskBlocksOf(x)).map(b => b.date + ' ' + b.startTime).sort();
   return ks.length ? ks[0] : null;
 }
-// 前提ごとの状態：ok／unplaced（前提が未配置）／reversed（前提が後にある）。blockedBy が空なら items は空（対象外）
+// 前提の最も遅い配置の終了（"日付 終了時刻"）。無ければ null
+function latestEndKey(t) {
+  const ks = depLeaves(t).flatMap(x => taskBlocksOf(x)).map(b => b.date + ' ' + b.endTime).sort();
+  return ks.length ? ks[ks.length - 1] : null;
+}
+// 前提ごとの状態（優先順）：完了→ok／配置なし→unplaced（前提が未配置）／不足→short（前提の配置が不足）／順序→reversed（前提が後にある）
+// 順序は、前提の「最も遅い配置の終了」が、後続の「最も早い配置の開始」より後なら reversed（前提が月曜＋木曜に分かれ、後続が火曜、など）。blockedBy が空なら items は空（対象外）
 function depStatus(t) {
   const items = blockersOf(t).map(p => {
     if (depDone(p)) return { p, state: 'ok' };
-    const pk = earliestKey(p); if (pk === null) return { p, state: 'unplaced' };
+    if (earliestKey(p) === null) return { p, state: 'unplaced' };
+    if (depLeaves(p).some(x => !x.completed && taskRemaining(x) > 0)) return { p, state: 'short' };
     const tk = earliestKey(t);
-    return { p, state: (tk !== null && pk > tk) ? 'reversed' : 'ok' };
+    return { p, state: (tk !== null && latestEndKey(p) > tk) ? 'reversed' : 'ok' };
   });
   return { items, warns: items.filter(i => i.state !== 'ok') };
 }
-const DEP_LABEL = { unplaced: '前提が未配置', reversed: '前提が後にある' };
+const DEP_LABEL = { unplaced: '前提が未配置', short: '前提の配置が不足', reversed: '前提が後にある' };
 const depWarnText = t => depStatus(t).warns.map(i => `${DEP_LABEL[i.state]}：${i.p.title}`).join(' / ');
 // ⚠バッジ（ホバーで理由と前提タスク名）。警告が無ければ空
 function warnBadge(t) { const w = depWarnText(t); return w ? ` <span class="warnb" title="${h(w)}">⚠</span>` : ''; }
