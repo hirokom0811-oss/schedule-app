@@ -66,6 +66,34 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
     linear-gradient(to bottom, transparent calc(100% - 1px), var(--line-15) 100%);
   background-size: 100% var(--hh), 100% calc(var(--hh) / 2), 100% calc(var(--hh) / 4); }
 .grid-body.z0 .col, .grid-body.z1 .col { background-size: 100% var(--hh), 100% calc(var(--hh) / 2), 0 0; }  /* 標準・拡大：1時間と30分の線。15分の線は最大だけ（刻みより細かい線は出さない） */
+/* ガント（週のタスク軸の見え方。読み取り専用） */
+.gantt { padding: 8px; overflow-x: auto; }
+.g-grid { min-width: 560px; }
+.g-row { display: grid; grid-template-columns: minmax(150px, 1.4fr) repeat(7, minmax(44px, 1fr)); align-items: stretch; border-bottom: 1px solid var(--border); }
+.g-row.g-head { background: var(--bg); font-size: 12px; text-align: center; }
+.g-row.g-head > div { padding: 6px 2px; border-left: 1px solid var(--border); }
+.g-row.g-head > div:first-child { border-left: 0; text-align: left; padding-left: 6px; }
+.g-row.g-head .today { color: var(--primary); font-weight: 700; }
+.g-name { padding: 5px 6px; font-size: 13px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; align-self: center; }
+.g-name:hover { text-decoration: underline; }
+.g-name .sub { color: var(--muted); font-size: 11px; margin-left: 4px; }
+.g-c { position: relative; min-height: 30px; border-left: 1px solid var(--border); display: flex; align-items: center; justify-content: center; font-size: 11px; }
+.g-c.today { background: #f5f8ff; }
+.g-c.mid::before, .g-c.on::before { content: ''; position: absolute; left: 0; right: 0; top: 7px; bottom: 7px; background: var(--primary); }
+.g-c.mid::before { opacity: .22; }
+.g-c.on::before { opacity: .9; }
+.g-c > span { position: relative; z-index: 1; color: #fff; white-space: nowrap; }
+.g-c.mid > span { color: var(--text); }
+.g-c .g-due { position: absolute; right: 2px; top: 1px; z-index: 2; color: var(--danger); font-size: 12px; line-height: 1; }
+.g-row.done .g-c.on::before, .g-row.done .g-c.mid::before { background: var(--muted); }
+.g-row.done .g-name { color: var(--muted); text-decoration: line-through; }
+.warnb { color: var(--warn); font-weight: 700; cursor: help; }
+.chain { color: var(--muted); font-size: 11px; }
+.chip { display: inline-flex; align-items: center; gap: 4px; background: var(--primary-soft); border-radius: 12px; padding: 1px 4px 1px 8px; margin: 0 4px 4px 0; font-size: 12px; }
+.chip a { color: var(--muted); text-decoration: none; padding: 0 3px; }
+.g-sec { font-size: 12px; font-weight: 600; margin: 12px 0 4px; }
+.g-miss { display: flex; align-items: center; gap: 8px; padding: 4px 6px; font-size: 13px; border-bottom: 1px dashed var(--border); }
+.g-miss .ttl { cursor: pointer; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .zoom-ctl { display: inline-flex; align-items: center; gap: 4px; }
 .zoom-ctl .lbl { font-size: 11px; color: var(--muted); min-width: 64px; text-align: center; }
 .col.today-col { background-color: #f8fbff; }
@@ -108,6 +136,8 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 .rv-rec { background: #f8fafc; border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; margin-bottom: 8px; font-size: 12px; }
 .rv-rec .lbl { color: var(--muted); margin-bottom: 2px; }
 .rv-rec-i { padding: 1px 0; }
+.rec-did { margin: 2px 0 4px; padding-left: 20px; font-size: 12px; color: var(--text); }
+.rec-did li { margin: 0; }
 .rv-time { color: var(--muted); font-variant-numeric: tabular-nums; margin-right: 4px; }
 .rv-free { border: 1px dashed var(--border); border-radius: 6px; padding: 4px 8px; margin-bottom: 6px; }
 .rv-free > summary { cursor: pointer; font-size: 12px; color: var(--muted); padding: 4px 0; }
@@ -246,6 +276,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
     <button data-view="day" onclick="setView('day')">日</button>
     <button data-view="week" onclick="setView('week')">週</button>
     <button data-view="month" onclick="setView('month')">月</button>
+    <button data-view="gantt" onclick="setView('gantt')" title="タスクが週のどこに広がっているかを、横棒で見る（読み取り専用）">ガント</button>
   </div>
   <span class="zoom-ctl"><button class="btn" id="zoom-out" onclick="zoomBy(-1)" title="縮小">－</button><span class="lbl" id="zoom-lbl"></span><button class="btn" id="zoom-in" onclick="zoomBy(1)" title="拡大">＋</button></span>
   <span class="loaded-at" id="loaded-at"></span>
@@ -271,7 +302,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 
 <script>
 'use strict';
-const APP_VERSION = 'v2.2.0';
+const APP_VERSION = 'v2.3.0';
 const GIST_FILE = 'schedule_data.json';
 const DAY_START = 6, DAY_END = 23;       // 表示する時間帯
 // 拡大レベル：1時間の高さ(px)と、ドラッグの刻み(分)。拡大するほど細かく動かせる（Shift押下中は5分）
@@ -563,7 +594,7 @@ function renderAll() {
 function updateTitle() {
   let t = '';
   if (S.view === 'month') { const d = parseDate(S.cur); t = `${d.getFullYear()}年 ${d.getMonth()+1}月`; }
-  else if (S.view === 'week') { const s = weekStart(S.cur); t = `${fmtMD(s)} – ${fmtMD(addDays(s, 6))}`; }
+  else if (S.view === 'week' || S.view === 'gantt') { const s = weekStart(S.cur); t = `${fmtMD(s)} – ${fmtMD(addDays(s, 6))}`; }
   else t = `${S.cur.replace(/-/g, '/')}(${dowLabel(S.cur)})`;
   document.getElementById('cal-title').textContent = t;
   { // 確定は、いま選んでいる区分だけが対象。確定済みで、「仮」の枠も残っていない週は、押せなくする（仮の枠を足したら、また押せる）
@@ -573,12 +604,13 @@ function updateTitle() {
     cb.title = done ? '確定を取り消すには、候補の欄の「確定を取り消す」を押します' : '';
   }
   document.getElementById('confirm-btn').classList.toggle('hidden', S.view !== 'week');   // 確定は週ビューだけ（日ビューで押すと、その日だけでなく週全体が対象になり紛らわしいため）
-  document.querySelector('.zoom-ctl').classList.toggle('hidden', S.view === 'month');   // 月ビューには時間の目盛りがないので、拡大・縮小は隠す
+  document.querySelector('.zoom-ctl').classList.toggle('hidden', S.view === 'month' || S.view === 'gantt');   // 月・ガントには時間の目盛りがないので、拡大・縮小は隠す
   document.getElementById('review-btn').classList.toggle('hidden', S.view !== 'day');
 }
 function renderCalendar() {
   const con = document.getElementById('cal');
   if (S.view === 'month') renderMonth(con);
+  else if (S.view === 'gantt') renderGantt(con);
   else renderGrid(con, S.view === 'week' ? Array.from({length: 7}, (_, i) => addDays(weekStart(S.cur), i)) : [S.cur]);
 }
 function setView(v) { S.view = v; renderAll(); }
@@ -603,11 +635,172 @@ function calNext() { navigate(1); }
 function navigate(dir) {
   const d = parseDate(S.cur);
   if (S.view === 'month') d.setMonth(d.getMonth() + dir);
-  else d.setDate(d.getDate() + (S.view === 'week' ? 7 : 1) * dir);
+  else d.setDate(d.getDate() + (S.view === 'week' || S.view === 'gantt' ? 7 : 1) * dir);
   S.cur = dateStr(d); renderAll();
 }
 function calToday() { S.cur = today(); renderAll(); }
 function jumpToDay(ds) { S.cur = ds; S.view = 'day'; renderAll(); }
+
+// ───────── 依存関係（前提タスク blockedBy）：登録と警告。配置は禁止しない ─────────
+// blockedBy は前提タスクのID配列（任意）。後続は保存せず、逆引きで求める。消えた前提のIDは無視する
+const blockersOf = t => (t.blockedBy || []).map(taskById).filter(Boolean);
+const followersOf = t => S.tasks.filter(x => (x.blockedBy || []).includes(t.id));
+// 配置の判定に使うタスク：親（まとめ）は、子の配置・完了をまとめて見る
+const depLeaves = t => isParent(t) ? childrenOf(t) : [t];
+const depDone = t => depLeaves(t).every(x => x.completed);
+// そのタスクの最も早い配置（"日付 開始時刻"）。無ければ null。繰り返し枠は、起点の日付で見る
+function earliestKey(t) {
+  const ks = depLeaves(t).flatMap(x => taskBlocksOf(x)).map(b => b.date + ' ' + b.startTime).sort();
+  return ks.length ? ks[0] : null;
+}
+// 前提ごとの状態：ok／unplaced（前提が未配置）／reversed（前提が後にある）。blockedBy が空なら items は空（対象外）
+function depStatus(t) {
+  const items = blockersOf(t).map(p => {
+    if (depDone(p)) return { p, state: 'ok' };
+    const pk = earliestKey(p); if (pk === null) return { p, state: 'unplaced' };
+    const tk = earliestKey(t);
+    return { p, state: (tk !== null && pk > tk) ? 'reversed' : 'ok' };
+  });
+  return { items, warns: items.filter(i => i.state !== 'ok') };
+}
+const DEP_LABEL = { unplaced: '前提が未配置', reversed: '前提が後にある' };
+const depWarnText = t => depStatus(t).warns.map(i => `${DEP_LABEL[i.state]}：${i.p.title}`).join(' / ');
+// ⚠バッジ（ホバーで理由と前提タスク名）。警告が無ければ空
+function warnBadge(t) { const w = depWarnText(t); return w ? ` <span class="warnb" title="${h(w)}">⚠</span>` : ''; }
+const chainTag = t => (blockersOf(t).length ? ' <span class="chain" title="前提タスクがあります">⛓ 前提あり</span>' : '');
+// 循環：t の前提に p を足すと、p が（直接・間接に）t を前提にしていて、ぐるっと回ってしまうか
+function wouldCycle(tId, pId, seen) {
+  if (pId === tId) return true;
+  seen = seen || new Set(); if (seen.has(pId)) return false; seen.add(pId);
+  const p = taskById(pId); if (!p) return false;
+  return (p.blockedBy || []).some(x => wouldCycle(tId, x, seen));
+}
+// 編集中の前提タスク欄（保存するまでは、タスクには反映しない）
+let _teBlocked = [], _teBlkQ = '';
+function teBlkHtml() {
+  const chips = _teBlocked.map(id => taskById(id)).filter(Boolean).map(p => `<span class="chip">${h(p.title)}<a href="#" onclick="teBlkDel('${p.id}');return false" title="外す">×</a></span>`).join('') || '<span class="empty">なし</span>';
+  const q = normQ(_teBlkQ);
+  const list = q ? S.tasks.filter(x => x.id !== _te && !_teBlocked.includes(x.id) && titleHit(x, q)).slice(0, 8) : [];
+  return `<div>${chips}</div><input type="search" class="search-in" placeholder="前提にするタスクを検索（名前の一部）" value="${h(_teBlkQ)}" oninput="teBlkSearch(this.value)" style="margin-top:4px">
+    <div class="rv-list">${list.map(x => `<div class="task-row"><span class="ttl">${h(x.title)}</span><button class="btn btn-sm" type="button" onclick="teBlkAdd('${x.id}')">前提にする</button></div>`).join('') || (q ? '<div class="empty">当てはまるタスクがありません</div>' : '')}</div>`;
+}
+function teBlkRender() { const el = document.getElementById('te-blk'); if (el) { el.innerHTML = teBlkHtml(); const i = el.querySelector('input'); if (i && _teBlkQ) { i.focus(); i.setSelectionRange(i.value.length, i.value.length); } } }
+function teBlkSearch(v) { _teBlkQ = v; teBlkRender(); }
+function teBlkAdd(id) {
+  if (_te && wouldCycle(_te, id)) { showToast(id === _te ? '自分自身は前提にできません' : '前提が回ってしまう（循環する）ので、登録できません'); return; }
+  if (!_teBlocked.includes(id)) _teBlocked.push(id);
+  _teBlkQ = ''; teBlkRender();
+}
+function teBlkDel(id) { _teBlocked = _teBlocked.filter(x => x !== id); teBlkRender(); }
+
+// ───────── 連動付け替え：前提の枠の日時が動いたら、後続タスクだけを、同じ差分ずれた先の枠へ付け替える（枠は動かさない）─────────
+// 枠は複数タスクの入れ物なので、後続の枠ごとの移動はしない。blockIds／alloc だけを移す。自動では動かさず、確認してから
+function moveBlockWithFollowers(id, data, kind) {
+  const b0 = blockById(id); if (!b0) return;
+  const before = { date: b0.date, start: toMin(b0.startTime) };
+  updateBlock(id, data, kind);
+  try { cascadeFollowers(blockById(id), before); } catch (e) { console.error('連動付け替えでエラー', e); showToast('後続の付け替えでエラーが出ました（枠の移動は済んでいます）'); }
+}
+function cascadeFollowers(b0, before) {
+  if (!b0) return;
+  const dayDiff = Math.round((parseDate(b0.date) - parseDate(before.date)) / 86400000);
+  const delta = dayDiff * 1440 + (toMin(b0.startTime) - before.start);
+  if (!delta) return;                                              // 日付も開始時刻も同じ（名前だけの変更など）なら、何もしない
+  const inB0 = new Set(blockTasks(b0.id).map(t => t.id));          // この枠にいるタスクは、枠と一緒にもう動いている
+  if (!inB0.size) return;
+  const directF = x => [...followersOf(x), ...(parentOf(x) ? followersOf(parentOf(x)) : [])];
+  const seen = new Set(inB0), queue = [...inB0].map(taskById).filter(Boolean), order = [];
+  while (queue.length) {
+    const x = queue.shift();
+    directF(x).forEach(f => { if (!seen.has(f.id)) { seen.add(f.id); order.push(f); queue.push(f); } });
+  }
+  if (!order.length) return;
+  const plan = [], skips = [], cache = new Map();                  // cache：元の枠ごとに、付け替え先を1つに決める（同居していたタスクは、同じ先へ）
+  const dur = b => toMin(b.endTime) - toMin(b.startTime);
+  const target = b => {
+    if (cache.has(b.id)) return cache.get(b.id);
+    let r;
+    const abs = toMin(b.startTime) + delta, day = Math.floor(abs / 1440), ns = abs - day * 1440, ne = ns + dur(b), nd = addDays(b.date, day);
+    if (ne > 1440) r = { reason: '日付をまたぐ時間になるため' };
+    else {
+      const cands = S.blocks.filter(x => x.id !== b.id && !x.recurrence && isDraft(x) && x.date === nd && kindOf(x) === kindOf(b))
+        .map(x => ({ x, ov: Math.min(ne, toMin(x.endTime)) - Math.max(ns, toMin(x.startTime)) })).filter(c => c.ov > 0)
+        .sort((p, q) => q.ov - p.ov || p.x.startTime.localeCompare(q.x.startTime));
+      if (cands.length) r = { block: cands[0].x };
+      else if (cwList(kindOf(b)).includes(weekStart(nd))) r = { reason: `ずれた先の週（${weekRangeLabel(weekStart(nd))}）が確定済みのため` };
+      else r = { make: { title: b.title, theme: b.theme, kind: b.kind, date: nd, startTime: fromMin(ns), endTime: fromMin(ne) } };
+    }
+    cache.set(b.id, r); return r;
+  };
+  order.forEach(f => depLeaves(f).forEach(t => {
+    taskBlocksOf(t).forEach(b => {
+      if (inB0.has(t.id)) return;
+      const where = `${b.recurrence ? '毎週 ' : fmtMD(b.date) + ' '}${b.startTime}–${b.endTime} ${b.title || '作業枠'}`;
+      if (t.completed) { skips.push({ t, where, reason: '完了済みのため' }); return; }
+      if (b.recurrence) { skips.push({ t, where, reason: '繰り返し枠（定型）は日付を持たないため' }); return; }
+      if (!isDraft(b)) { skips.push({ t, where, reason: '確定した枠に入っているため（外しません）' }); return; }
+      const tg = target(b);
+      if (tg.reason) skips.push({ t, where, reason: tg.reason }); else plan.push({ t, b, where, tg });
+    });
+  }));
+  if (!plan.length && !skips.length) return;
+  const lines = [];
+  plan.forEach(p => lines.push(`・${p.t.title}：${p.where} → ${p.tg.block ? `${fmtMD(p.tg.block.date)} ${p.tg.block.startTime}–${p.tg.block.endTime} ${p.tg.block.title || '作業枠'}（仮の枠）` : `${fmtMD(p.tg.make.date)} ${p.tg.make.startTime}–${p.tg.make.endTime} 「${p.tg.make.title || '作業枠'}」を新規作成（仮）`}`));
+  const sk = skips.map(s => `・${s.t.title}：${s.where}（${s.reason}）`);
+  const msg = `前提の枠が動きました（${delta >= 0 ? '+' : '−'}${Math.abs(delta) >= 1440 ? Math.floor(Math.abs(delta) / 1440) + '日' : ''}${Math.abs(delta) % 1440 ? (Math.abs(delta) % 1440) + '分' : ''}）。`
+    + (plan.length ? `\n\n後続タスク${new Set(plan.map(p => p.t.id)).size}件を、同じだけずらした枠へ付け替えます（枠そのものは動かしません）：\n${lines.join('\n')}` : '')
+    + (sk.length ? `\n\n付け替えないもの：\n${sk.join('\n')}` : '')
+    + (plan.length ? '\n\nOK＝付け替える／キャンセル＝付け替えない（順序の警告が出ます）' : '\n\n付け替えられる後続はありませんでした。');
+  if (!plan.length) { alert(msg); return; }
+  if (!confirm(msg)) { showToast(`付け替えませんでした（${plan.length}件）。前提の警告を確認してください`); return; }
+  const made = new Map();                                           // 元の枠ID → 新しく作った枠
+  plan.forEach(p => {
+    let nb = p.tg.block;
+    if (!nb) {
+      nb = made.get(p.b.id);
+      if (!nb) { nb = { id: uuid(), title: p.tg.make.title, theme: p.tg.make.theme || '', date: p.tg.make.date, startTime: p.tg.make.startTime, endTime: p.tg.make.endTime, recurrence: null, recurrenceEnd: null, status: 'draft', createdAt: new Date().toISOString() }; if (p.tg.make.kind === 'private') nb.kind = 'private'; S.blocks.push(nb); made.set(p.b.id, nb); }
+    }
+    const amt = taskUsage(p.t, p.b.id);                             // 元の枠での配分（alloc が無い旧データは見積全額）を、そのまま持ち越す。足りなくても削らない（超過は「超◯」で見える）
+    p.t.blockIds = (p.t.blockIds || []).filter(x => x !== p.b.id); if (p.t.alloc) delete p.t.alloc[p.b.id];
+    if (!p.t.blockIds.includes(nb.id)) p.t.blockIds.push(nb.id);
+    p.t.alloc = p.t.alloc || {}; p.t.alloc[nb.id] = (typeof p.t.alloc[nb.id] === 'number' ? p.t.alloc[nb.id] : 0) + amt;
+  });
+  save();
+  showToast(`後続${new Set(plan.map(p => p.t.id)).size}件を付け替えました${skips.length ? `（${skips.length}件は付け替えず）` : ''}${made.size ? `・枠${made.size}件を新規作成` : ''}。元に戻すは Ctrl+Z`);
+}
+
+// ───────── ガント：行＝この週に配置されたタスク、列＝月〜日 ─────────
+// そのタスクの、指定の週の中の配置（日付と枠）。繰り返し枠は、その週に当たる日ごとに数える
+function taskWeekPlacements(t, ws) {
+  const days = Array.from({length: 7}, (_, i) => addDays(ws, i)), out = [];
+  taskBlocksOf(t).forEach(b => days.forEach(ds => { if (isBlockOnDate(b, ds)) out.push({ ds, b }); }));
+  return out.sort((x, y) => (x.ds + x.b.startTime).localeCompare(y.ds + y.b.startTime));
+}
+function ganttRowHtml(t, ws, pl) {
+  const days = Array.from({length: 7}, (_, i) => addDays(ws, i)), on = new Set(pl.map(p => p.ds));
+  const first = days.findIndex(d => on.has(d)), last = days.length - 1 - [...days].reverse().findIndex(d => on.has(d));
+  const est = estLabel(t), lab = `${t.intent || ''}${est ? ' ' + est : ''}`.trim();
+  const cells = days.map((ds, i) => {
+    const cls = on.has(ds) ? 'on' : (i > first && i < last ? 'mid' : ''), isDue = t.dueDate === ds;
+    const inner = (i === first && lab ? `<span>${h(lab)}</span>` : '') + (isDue ? '<span class="g-due" title="期限">◆</span>' : '');
+    return `<div class="g-c ${cls} ${ds === today() ? 'today' : ''}" ${isDue ? `title="期限 ${fmtMD(ds)}"` : ''}>${inner}</div>`;
+  }).join('');
+  const tip = pl.map(p => `${fmtMD(p.ds)} ${p.b.startTime}–${p.b.endTime}${allocOf(t, p.b.id) !== null ? '（' + allocOf(t, p.b.id) + '分）' : ''}`).join(' / ');
+  return `<div class="g-row ${t.completed ? 'done' : ''}"><div class="g-name" title="${h(t.title + '\n' + tip)}" onclick="openTaskEdit('${t.id}')">${h(t.title)}${warnBadge(t)}</div>${cells}</div>`;
+}
+function renderGantt(con) {
+  const ws = viewWeek(), days = Array.from({length: 7}, (_, i) => addDays(ws, i));
+  const leaves = S.tasks.filter(t => !isParent(t) && kindOf(t) === VIEW_KIND);
+  const rows = leaves.map(t => ({ t, pl: taskWeekPlacements(t, ws) })).filter(r => r.pl.length)
+    .sort((a, b) => (a.pl[0].ds + a.pl[0].b.startTime).localeCompare(b.pl[0].ds + b.pl[0].b.startTime) || (a.t.dueDate || '9999').localeCompare(b.t.dueDate || '9999'));
+  const head = `<div class="g-row g-head"><div>${KIND_LABEL[VIEW_KIND]}・${rows.length}件</div>${days.map(ds => `<div class="${ds === today() ? 'today' : ''}">${fmtMD(ds)}</div>`).join('')}</div>`;
+  // 未配置の約束：その週が対象週で、意思が◎〇なのに、どの枠にも入っていないもの（月曜に置き忘れていないかの確認）
+  const miss = sortRanked(leaves.filter(t => t.week === ws && (t.intent === '◎' || t.intent === '〇') && !t.completed && !isPlaced(t)));
+  const missHtml = `<div class="g-sec">未配置の約束（意思◎〇・${weekRangeLabel(ws)}が対象週）${miss.length ? `：${miss.length}件` : ''}</div>` + (miss.length
+    ? miss.map(t => `<div class="g-miss"><span class="intent i${t.intent === '◎' ? '1' : '2'}">${h(t.intent)}</span><span class="ttl" title="${h(t.title)}" onclick="openTaskEdit('${t.id}')">${h(t.title)}</span><span class="${dueOver(t) ? 'empty over' : 'empty'}">${t.dueDate ? '〆 ' + fmtMD(t.dueDate) : '〆 なし'}</span></div>`).join('')
+    : '<div class="empty" style="padding:4px 6px">置き忘れはありません</div>');
+  con.innerHTML = `<div class="gantt"><div class="g-grid">${head}${rows.length ? rows.map(r => ganttRowHtml(r.t, ws, r.pl)).join('') : '<div class="empty" style="padding:12px 6px">この週に配置されたタスクはありません</div>'}</div>${missHtml}</div>`;
+}
 
 function renderMonth(con) {
   const d = parseDate(S.cur); const mo = d.getMonth();
@@ -807,9 +1000,9 @@ function onBlkUp(e) {
   _justDragged = true; setTimeout(() => _justDragged = false, 50);
   const startTime = fromMin(d.s), endTime = fromMin(d.e);
   if (d.b.recurrence) {
-    if (startTime !== d.b.startTime || endTime !== d.b.endTime) updateBlock(d.b.id, { startTime, endTime }, 'move');
+    if (startTime !== d.b.startTime || endTime !== d.b.endTime) moveBlockWithFollowers(d.b.id, { startTime, endTime }, 'move');
   } else if (d.date !== d.b.date || startTime !== d.b.startTime || endTime !== d.b.endTime) {
-    updateBlock(d.b.id, { date: d.date, startTime, endTime }, 'move');
+    moveBlockWithFollowers(d.b.id, { date: d.date, startTime, endTime }, 'move');
   }
   renderAll();
 }
@@ -906,9 +1099,9 @@ function candRowHtml(t, i, noRank, child) {
     const when = placed ? upcomingBlocksOf(t).map(b => `<a class="when" href="#" onclick="gotoBlock('${b.id}');return false">${b.recurrence ? '毎週 ' : fmtMD(b.date) + ' '}${b.startTime}–${b.endTime}${allocOf(t, b.id) !== null && ((t.blockIds || []).length > 1 || rem > 0) ? `（${allocOf(t, b.id)}分）` : ''}</a>`).join('') : '';
     const btn = rem > 0 ? `<button class="btn btn-sm btn-primary" onclick="openPlace('${t.id}')">${placed ? '続きを配置' : '配置'}</button>` : '';
     return `<div class="cand ${placed ? 'placed' : ''} ${child ? 'child' : ''}"><div class="cand-main">${noRank ? '' : `<span class="rankno">${i + 1}</span>`}${t.intent ? `<span class="intent i${t.intent === '◎' ? '1' : '2'}">${h(t.intent)}</span>` : ''}
-      <span class="ttl" title="${h(t.title)}" onclick="openTaskEdit('${t.id}')">${h(t.title)}</span>${btn}</div>
+      <span class="ttl" title="${h(t.title)}" onclick="openTaskEdit('${t.id}')">${h(t.title)}</span>${warnBadge(t)}${btn}</div>
       ${placed ? `<div class="cand-when"><span class="done-tag">${rem > 0 ? '一部配置' : '配置済み'}</span>${when}${rem > 0 ? `<span class="rest-tag">あと${rem}分 未配置</span>` : ''}</div>` : ''}
-      <div class="cand-sub ${dueOver(t) ? 'over' : ''}">${h(sub.join('　'))} <a href="#" onclick="openTaskEdit('${t.id}');return false">編集</a>${split}</div></div>`;
+      <div class="cand-sub ${dueOver(t) ? 'over' : ''}">${h(sub.join('　'))} <a href="#" onclick="openTaskEdit('${t.id}');return false">編集</a>${split}${chainTag(t)}</div></div>`;
   }
 }
 function countLabel(list) { const u = unplacedCount(list), pl = leavesOf(list).length - u; return `未配置${u}件` + (pl ? `・配置済み${pl}件` : ''); }
@@ -1038,7 +1231,7 @@ function blockTasksSection(b, viewDate) {
   const unplaced = S.tasks.filter(t => !t.completed && !isParent(t) && !(t.blockIds || []).includes(b.id) && placementFor(t, b).ok);
   const sug = suggestFor(b);
   return `<div class="sect"><h4>この枠のタスク（${st.done}/${st.total}完了 ／ 見積${st.used}分 ／ ${st.free === 0 && st.total ? '残0分（いっぱい）' : st.free < 0 ? `<b style="color:var(--danger)">${-st.free}分超過</b>` : `残${st.free}分`}）</h4>
-    ${ts.map(t => `<div class="task-row"><input type="checkbox" ${t.completed ? 'checked' : ''} onchange="toggleTask('${t.id}')"><span class="ttl">${h(t.title)}</span><span class="meta">${allocOf(t, b.id) !== null ? allocOf(t, b.id) + '分' : estLabel(t)}</span><button class="btn btn-sm" onclick="editTaskFromBlock('${t.id}')" title="名前・見積・この枠の分数などを直します">編集</button><button class="btn btn-sm" onclick="unlinkFromModal('${t.id}')">外す</button></div>`).join('') || '<div class="empty">まだありません</div>'}
+    ${ts.map(t => `<div class="task-row"><input type="checkbox" ${t.completed ? 'checked' : ''} onchange="toggleTask('${t.id}')"><span class="ttl">${h(t.title)}${warnBadge(t)}</span><span class="meta">${allocOf(t, b.id) !== null ? allocOf(t, b.id) + '分' : estLabel(t)}</span><button class="btn btn-sm" onclick="editTaskFromBlock('${t.id}')" title="名前・見積・この枠の分数などを直します">編集</button><button class="btn btn-sm" onclick="unlinkFromModal('${t.id}')">外す</button></div>${t.record ? recDidHtml(t) : ''}`).join('') || '<div class="empty">まだありません</div>'}
     <div class="row" style="margin-top:6px"><select id="bm-addtask"><option value="">タスクを追加…</option>${unplaced.map(t => `<option value="${t.id}">${h(t.title)}</option>`).join('')}</select>
     <button class="btn btn-sm" onclick="addTaskFromModal()">追加</button></div></div>
     <div class="sect"><h4>おすすめ（期限・優先度・残り時間から）</h4>
@@ -1063,7 +1256,7 @@ function saveBlockModal() {
   if (d.kind === 'private') d.theme = '';                                    // プライベートの枠には、テーマを付けない
   // 区分が食い違うタスクが入っていても、外さず、枠に残す（外すと割り当て分数が消えて戻せないため）。タスクの区分も変えない。新しく入れる側の判定（placementFor）は、これまでどおり区分を見る
   const mis = _bm.id ? blockTasks(_bm.id).filter(t => kindOf(t) !== kindOf(d)).length : 0;
-  if (_bm.id) updateBlock(_bm.id, d, 'edit'); else addBlock(d);
+  if (_bm.id) moveBlockWithFollowers(_bm.id, d, 'edit'); else addBlock(d);
   closeModal(); renderAll();
   if (mis) showToast(`区分を変えました。区分の違うタスク${mis}件は、枠に残しています`);
 }
@@ -1114,6 +1307,7 @@ function backToBlock() {
 }
 function openTaskEdit(id, back) {
   _te = id; _teBack = back || null;
+  _teBlocked = id && taskById(id) ? blockersOf(taskById(id)).map(p => p.id) : []; _teBlkQ = '';
   const t = id ? taskById(id) : { title: '', intent: '', estimateH: null, split: '', dueDate: '', rank: null, scale: 'medium', priority: 'medium', week: viewWeek(), kind: VIEW_KIND === 'private' ? 'private' : undefined };
   if (!t) return;
   const sel = (val, opts) => opts.map(([v, l]) => `<option value="${v}" ${String(val || '') === v ? 'selected' : ''}>${l}</option>`).join('');
@@ -1123,6 +1317,7 @@ function openTaskEdit(id, back) {
   openModal(`<h3>${id ? 'タスクを編集' : 'タスクを追加'}<button class="btn btn-sm" onclick="cancelTaskEdit()">✕</button></h3>
     ${bk ? `<div class="empty" style="margin-bottom:6px">枠のダイアログから開きました。保存・キャンセルで、その枠へ戻ります（枠のダイアログで入力中だった内容は、そのまま戻ります）</div>` : ''}
     ${parentOf(t) ? `<div class="row"><label>親</label><span>${h(parentOf(t).title)}</span></div>` : ''}
+    ${t.record && (recDid(t).length || recSpan(t)) ? `<div class="row" style="align-items:flex-start"><label>実績</label><div style="flex:1;min-width:0">${recSpan(t) ? `<div class="empty">${recSpan(t).start}–${recSpan(t).end}${t.source ? '　書き込み元：' + h(t.source) : ''}</div>` : ''}${recDidHtml(t) || '<div class="empty">やったこと：なし</div>'}</div></div>` : ''}
     <div class="row"><label>名前</label><input id="te-title" value="${h(t.title)}" placeholder="例：資料の下書き"></div>
     <div class="row"><label>区分</label><select id="te-kind">${sel(kindOf(t), [['work', '仕事'], ['private', 'プライベート']])}</select><span class="empty">プライベートは、プライベートの枠にだけ入ります</span></div>
     <div class="row"><label>意思</label><select id="te-intent">${sel(t.intent, [['', '（なし）'], ['◎', '◎'], ['〇', '〇']])}</select></div>
@@ -1133,6 +1328,8 @@ function openTaskEdit(id, back) {
     <div class="row"><label></label><span class="empty">この週の候補に出ます（月曜の日付に直して保存）。「なし」は、候補の「週の指定なし」に出ます</span></div>
     <div class="row"><label>期限</label><input id="te-due" type="date" value="${t.dueDate || ''}"></div>
     <div class="row"><label>順位</label><input id="te-rank" type="number" step="1" min="1" inputmode="numeric" value="${typeof t.rank === 'number' ? t.rank : ''}" placeholder="1が最優先。空欄でも可"></div>
+    <div class="row" style="align-items:flex-start"><label>前提タスク${id && t.blockedBy && t.blockedBy.length ? '<br>' + chainTag(t) : ''}</label><div style="flex:1;min-width:0" id="te-blk">${teBlkHtml()}</div></div>
+    ${id && depWarnText(t) ? `<div class="row"><label></label><span class="empty"><span class="warnb">⚠</span> ${h(depWarnText(t))}</span></div>` : ''}
     <div class="row"><label>大きさ</label><select id="te-scale">${sel(t.scale, [['small', '小（約15分）'], ['medium', '中（約45分）'], ['large', '大（約90分）'], ['super', '特大（約120分）']])}</select><span class="empty">見積(h)が空のときに使う目安</span></div>
     <div class="foot">${id ? '<button class="btn btn-danger" onclick="deleteTaskFromEdit()">削除</button>' : ''}<span class="spacer"></span><button class="btn" onclick="cancelTaskEdit()">キャンセル</button><button class="btn btn-primary" onclick="saveTaskEdit()">保存</button></div>`);
 }
@@ -1147,7 +1344,9 @@ function saveTaskEdit() {
   const d = { title, intent: intent || null, estimateH: est > 0 ? est : null, split: document.getElementById('te-split').value || null,
     dueDate: document.getElementById('te-due').value || null, rank: rank > 0 ? rank : null, scale: document.getElementById('te-scale').value,
     week: document.getElementById('te-week').value ? weekStart(document.getElementById('te-week').value) : null,
-    kind: document.getElementById('te-kind').value === 'private' ? 'private' : undefined };
+    kind: document.getElementById('te-kind').value === 'private' ? 'private' : undefined,
+    blockedBy: _teBlocked.length ? _teBlocked.slice() : undefined };
+  if (_te && _teBlocked.some(x => wouldCycle(_te, x))) { showToast('前提が回ってしまう（循環する）ので、保存できません'); return; }
   if (d.estimateH) d.scale = scaleFromMin(Math.round(d.estimateH * 60));        // 見積があれば、大きさもそれに合わせる
   if (intent) d.priority = intent === '◎' ? 'high' : 'medium';                  // 意思があれば、優先度もそれに合わせる（期限・優先度の点数に使う）
   const t = _te ? taskById(_te) : null;
@@ -1167,6 +1366,7 @@ function deleteTaskFromEdit() {
   if (!confirm(`「${t.title}」を削除します（枠に入っている場合は、枠から外れます）。${kids.length ? `\n分解した子${kids.length}件は消さず、単独のタスクに戻します。` : ''}\nよろしいですか？`)) return;
   kids.forEach(c => { delete c.parentId; });
   S.tasks = S.tasks.filter(x => x.id !== _te);
+  S.tasks.forEach(x => { if (x.blockedBy) { x.blockedBy = x.blockedBy.filter(i => i !== _te); if (!x.blockedBy.length) delete x.blockedBy; } });   // 消したタスクを前提にしていたものから外す
   save(); const back = _candCtx, bb = _teBack; closeModal(); renderAll(); showToast('削除しました');
   if (bb) { _teBack = bb; backToBlock(); } else if (back) openCandidates();
 }
@@ -1376,7 +1576,10 @@ function confirmWeek() {
   if (!all.length && isWeekConfirmed(ws)) { showToast(`この週の${KIND_LABEL[VIEW_KIND]}は、確定済みです`); return; }
   const head = all.length ? `${kl}${fmtMD(ws)}〜${fmtMD(we)} の「仮」${all.length}件を確定にします。` : `${kl}${fmtMD(ws)}〜${fmtMD(we)} に「仮」の枠はありません。この週を、確定済みにします。`;
   const note = un ? `\nこの週の候補で、枠に入っていないものが${un}件あります（確定後は、候補の欄から隠れます）。` : (cand.length ? '\n確定後は、この週の候補は、候補の欄から隠れます。' : '');
-  if (!confirm(`${head}${note}\nよろしいですか？`)) return;
+  // 前提タスクの警告（この週に配置のあるタスクのうち、前提が未配置／後にあるもの）。確定は妨げない：OK＝このまま確定、キャンセル＝戻る
+  const warn = S.tasks.filter(t => !isParent(t) && kindOf(t) === VIEW_KIND && !t.completed && taskWeekPlacements(t, ws).length && depWarnText(t));
+  const warnNote = warn.length ? `\n\n⚠ 前提タスクの警告が${warn.length}件あります：\n${warn.map(t => `・${t.title}（${depWarnText(t)}）`).join('\n')}\n（OK＝このまま確定／キャンセル＝戻る）` : '';
+  if (!confirm(`${head}${note}${warnNote}\nよろしいですか？`)) return;
   all.forEach(b => { b.status = 'confirmed'; });
   if (!isWeekConfirmed(ws)) cwList().push(ws);
   _showWeeks.delete(VIEW_KIND + ':' + ws);
@@ -1499,7 +1702,7 @@ function renderReview() {
   const freeOpen = r.freeOpen || fIdx.some(i => r.items[i].exKind || r.items[i].relinked);   // 例外を入れた・付け替え済みの項目があれば、最初から開く
   openModal(`<h3>${fmtMD(r.date)} の振り返り<button class="btn btn-sm" onclick="closeModal()">✕</button></h3>
     ${(() => { const rs = S.tasks.filter(t => t.record && t.completed && t.dueDate === r.date).sort((a, b) => ((recSpan(a) || {}).start || '').localeCompare((recSpan(b) || {}).start || ''));
-      return rs.length ? `<div class="rv-rec"><div class="lbl">この日の実績（取り込み・記録）${rs.length}件。見るだけです</div>${rs.map(t => { const sp = recSpan(t); return `<div class="rv-rec-i"><span class="rv-time">${sp ? sp.start + '–' + sp.end : ''}</span> ${h(t.title)}${t.source ? `<span class="rv-legacy">${h(t.source)}</span>` : ''}</div>`; }).join('')}</div>` : ''; })()}
+      return rs.length ? `<div class="rv-rec"><div class="lbl">この日の実績（取り込み・記録）${rs.length}件。見るだけです</div>${rs.map(t => { const sp = recSpan(t); return `<div class="rv-rec-i"><span class="rv-time">${sp ? sp.start + '–' + sp.end : ''}</span> ${h(t.title)}${t.source ? `<span class="rv-legacy">${h(t.source)}</span>` : ''}${recDidHtml(t)}</div>`; }).join('')}</div>` : ''; })()}
     ${r.items.length ? '<div class="empty" style="margin-bottom:6px">約束タスク（意思◎〇）の入った枠だけ、確認します。何も入れなければ、計画どおりとして保存します</div>' : ''}
     ${pIdx.length ? pIdx.map(i => reviewItemHtml(r.items[i], i)).join('') : (r.items.length ? '<div class="empty">この日は、約束タスクの入った枠がありません</div>' : '<div class="empty">この日の振り返り対象（テーマ付きの予定）がありません。一言だけでも保存できます</div>')}
     ${fIdx.length ? `<details class="rv-free" ${freeOpen ? 'open' : ''} ontoggle="_rv.freeOpen=this.open"><summary>自由枠の例外を記録する（付け替え・突発・小物）　${fIdx.length}枠</summary>${fIdx.map(i => reviewItemHtml(r.items[i], i)).join('')}</details>` : ''}
@@ -1651,6 +1854,10 @@ function linkRecordToBlock(t, r) {
 // 記録のタスクの時間帯（memoの先頭「HH:MM〜HH:MM（N分）」から読む）
 const REC_TIME = /^(\d{2}:\d{2})〜(\d{2}:\d{2})（(\d+)分）/;
 const recSpan = t => { const m = REC_TIME.exec(t.memo || ''); return m ? { start: m[1], end: m[2] } : null; };
+// 記録の「やったこと」。v2.2.1以降の取り込みは task.did（配列）に持つ。それ以前の取り込み・register_session_task.py の記録は、memo（「時間。重なる枠：…。やったこと1。やったこと2」を「。」でつないだもの）から読み出す
+// （memoから読む場合、やったことの中に「。」があると、そこで別の項目に分かれて表示される）
+const recDid = t => Array.isArray(t.did) ? t.did : String(t.memo || '').split('。').slice(1).map(s => s.trim()).filter(s => s && !s.startsWith('重なる枠：'));
+const recDidHtml = t => { const d = recDid(t); return d.length ? `<ul class="rec-did">${d.map(x => `<li>${h(x)}</li>`).join('')}</ul>` : ''; };
 // v2.1.0で取り込んだ、枠に紐づいていない記録（source付き）に、枠を作って紐づける
 function repairUnlinkedRecords() {
   const todo = S.tasks.filter(t => t.record && t.source && t.completed && t.dueDate && !(t.blockIds || []).some(id => blockById(id)) && recSpan(t));
@@ -1672,6 +1879,7 @@ function importRecords(text) {
       completed: true, completedAt: nowIso, record: true, blockIds: [], createdAt: nowIso };
     if (source) t.source = source;
     if (r.kind === 'private') t.kind = 'private';
+    if (r.did.length) t.did = r.did.slice();        // やったこと（配列）。画面（振り返り・タスク編集・枠のダイアログ）に出す。memoにも従来どおり入れる
     const pl = linkRecordToBlock(t, r);
     t.memo = [`${r.start}〜${r.end}（${min}分）`, ...(pl.hits.length ? ['重なる枠：' + pl.hits.map(b => b.title || '作業枠').join('、')] : []), ...r.did].join('。');
     S.tasks.push(t); added.push({ ...r, block: pl.link.title || '作業枠', created: pl.created });
