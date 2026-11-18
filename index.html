@@ -313,7 +313,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 
 <script>
 'use strict';
-const APP_VERSION = 'v2.4.0';
+const APP_VERSION = 'v2.4.1';
 const GIST_FILE = 'schedule_data.json';
 const DAY_START = 6, DAY_END = 23;       // 表示する時間帯
 // 拡大レベル：1時間の高さ(px)と、ドラッグの刻み(分)。拡大するほど細かく動かせる（Shift押下中は5分）
@@ -799,10 +799,12 @@ const ACT_RANK = { bad: 3, partial: 2 };                              // good・
 const ACT_VIEW = { 3: { cls: 'ng', sym: '×', word: '未達' }, 2: { cls: 'part', sym: '△', word: '一部' }, 1: { cls: 'ok', sym: '○', word: '実施' } };
 function weekActuals(ws) {                                           // → Map(taskId → Map(日付 → 3|2|1))
   const days = new Set(Array.from({length: 7}, (_, i) => addDays(ws, i))), out = new Map();
+  const put = (id, ds, rk) => { const m = out.get(id) || new Map(); m.set(ds, Math.max(m.get(ds) || 0, rk)); out.set(id, m); };
   S.reviews.forEach(r => { if (!days.has(r.date)) return;
-    (r.items || []).forEach(it => { if (!it.taskId) return;
-      const rk = ACT_RANK[it.result] || 1, m = out.get(it.taskId) || new Map();
-      m.set(r.date, Math.max(m.get(r.date) || 0, rk)); out.set(it.taskId, m); }); });
+    (r.items || []).forEach(it => {
+      if (it.taskId) put(it.taskId, r.date, ACT_RANK[it.result] || 1);
+      (it.doneTaskIds || []).forEach(id => put(id, r.date, 1));          // v2.4.1：「実際にやったタスク（付け替え）」は、項目の元のタスクとは別に、やった方へ○（実施）を付ける
+    }); });
   return out;
 }
 const fmtMDs = ds => { const d = parseDate(ds); return `${d.getMonth() + 1}/${d.getDate()}`; };
