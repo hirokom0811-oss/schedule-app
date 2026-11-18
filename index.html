@@ -97,6 +97,8 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 .g-c .g-act.ok, .g-legend .g-act.ok { background: #2e9e5b; color: #fff; }
 .g-c .g-act.part, .g-legend .g-act.part { background: #f2c84b; color: #4a3a00; }
 .g-c .g-act.ng, .g-legend .g-act.ng { background: var(--danger); color: #fff; }
+.g-c .g-act.hl { right: calc(50% + 1px); }
+.g-c .g-act.hr { left: calc(50% + 1px); }
 .g-legend { font-size: 11px; color: var(--muted); margin: 6px 2px 0; }
 .g-legend .g-act { position: static; height: 11px; border-radius: 3px; font-size: 9px; line-height: 11px; text-align: center; font-weight: 700; display: inline-block; width: 16px; vertical-align: middle; cursor: default; }
 .g-rec { display: flex; align-items: baseline; gap: 8px; padding: 4px 6px; font-size: 13px; border-bottom: 1px dashed var(--border); }
@@ -313,7 +315,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 
 <script>
 'use strict';
-const APP_VERSION = 'v2.4.1';
+const APP_VERSION = 'v2.4.2';
 const GIST_FILE = 'schedule_data.json';
 const DAY_START = 6, DAY_END = 23;       // 表示する時間帯
 // 拡大レベル：1時間の高さ(px)と、ドラッグの刻み(分)。拡大するほど細かく動かせる（Shift押下中は5分）
@@ -797,15 +799,23 @@ function taskWeekPlacements(t, ws) {
 // 実績（v2.4.0）：振り返り（S.reviews）の項目＝「その日にそのタスクを実際にやった」。タスク×日で集計し、同じ日に複数あれば最も悪い結果に合わせる（bad＞partial＞good・null）
 const ACT_RANK = { bad: 3, partial: 2 };                              // good・null（計画どおり）は 1
 const ACT_VIEW = { 3: { cls: 'ng', sym: '×', word: '未達' }, 2: { cls: 'part', sym: '△', word: '一部' }, 1: { cls: 'ok', sym: '○', word: '実施' } };
-function weekActuals(ws) {                                           // → Map(taskId → Map(日付 → 3|2|1))
+// 集計は2チャンネル（v2.4.2）：res＝成否（項目のtaskIdのresult。タスク×日で最も悪い結果＝3|2|1、無ければ0）／did＝実施（他の項目のdoneTaskIdsに入っている＝付け替えで実際にやった）。
+// 種類の違う記録なので競わせない（v2.4.1は○が×に潰れていた）
+function weekActuals(ws) {                                           // → Map(taskId → Map(日付 → {res, did}))
   const days = new Set(Array.from({length: 7}, (_, i) => addDays(ws, i))), out = new Map();
-  const put = (id, ds, rk) => { const m = out.get(id) || new Map(); m.set(ds, Math.max(m.get(ds) || 0, rk)); out.set(id, m); };
+  const cell = (id, ds) => { const m = out.get(id) || new Map(); out.set(id, m); const c = m.get(ds) || { res: 0, did: false }; m.set(ds, c); return c; };
   S.reviews.forEach(r => { if (!days.has(r.date)) return;
     (r.items || []).forEach(it => {
-      if (it.taskId) put(it.taskId, r.date, ACT_RANK[it.result] || 1);
-      (it.doneTaskIds || []).forEach(id => put(id, r.date, 1));          // v2.4.1：「実際にやったタスク（付け替え）」は、項目の元のタスクとは別に、やった方へ○（実施）を付ける
+      if (it.taskId) { const c = cell(it.taskId, r.date); c.res = Math.max(c.res, ACT_RANK[it.result] || 1); }
+      (it.doneTaskIds || []).forEach(id => { cell(id, r.date).did = true; });
     }); });
   return out;
+}
+// その日に出す帯。成否が△×で、実施も（付け替えで）ある日は2つ併記。成否が○なら、実施と同じなので○1つ
+function actMarks(c) {
+  const rv = c.res ? ACT_VIEW[c.res] : null, dv = ACT_VIEW[1];
+  if (rv && c.did && c.res > 1) return [{ v: rv, title: '' }, { v: dv, title: '付け替えで実施 ' }];
+  return [{ v: rv || dv, title: '' }];
 }
 const fmtMDs = ds => { const d = parseDate(ds); return `${d.getMonth() + 1}/${d.getDate()}`; };
 function ganttRowHtml(t, ws, pl, act) {
@@ -814,13 +824,13 @@ function ganttRowHtml(t, ws, pl, act) {
   const first = days.findIndex(d => on.has(d)), last = days.length - 1 - [...days].reverse().findIndex(d => on.has(d));
   const est = estLabel(t), lab = `${t.intent || ''}${est ? ' ' + est : ''}`.trim();
   const cells = days.map((ds, i) => {
-    const cls = on.has(ds) ? 'on' : (i > first && i < last ? 'mid' : ''), isDue = t.dueDate === ds, a = act.get(ds) ? ACT_VIEW[act.get(ds)] : null;
+    const cls = on.has(ds) ? 'on' : (i > first && i < last ? 'mid' : ''), isDue = t.dueDate === ds, ms = act.get(ds) ? actMarks(act.get(ds)) : [];
     const inner = (i === first && lab ? `<span>${h(lab)}</span>` : '') + (isDue ? '<span class="g-due" title="期限">◆</span>' : '')
-      + (a ? `<span class="g-act ${a.cls}" title="実績 ${fmtMDs(ds)} ${a.sym}（${a.word}）">${a.sym}</span>` : '');
-    return `<div class="g-c ${cls} ${a ? 'has-act' : ''} ${ds === today() ? 'today' : ''}" ${isDue ? `title="期限 ${fmtMD(ds)}"` : ''}>${inner}</div>`;
+      + ms.map((m, k) => `<span class="g-act ${m.v.cls} ${ms.length > 1 ? (k ? 'hr' : 'hl') : ''}" title="実績 ${fmtMDs(ds)} ${m.title}${m.v.sym}（${m.v.word}）">${m.v.sym}</span>`).join('');
+    return `<div class="g-c ${cls} ${ms.length ? 'has-act' : ''} ${ds === today() ? 'today' : ''}" ${isDue ? `title="期限 ${fmtMD(ds)}"` : ''}>${inner}</div>`;
   }).join('');
   const tip = pl.map(p => `${fmtMD(p.ds)} ${p.b.startTime}–${p.b.endTime}${allocOf(t, p.b.id) !== null ? '（' + allocOf(t, p.b.id) + '分）' : ''}`).join(' / ');
-  const atip = [...act.keys()].sort().map(ds => `${fmtMDs(ds)} ${ACT_VIEW[act.get(ds)].sym}`).join('、');
+  const atip = [...act.keys()].sort().map(ds => `${fmtMDs(ds)} ${actMarks(act.get(ds)).map(m => m.title + m.v.sym).join('／')}`).join('、');
   return `<div class="g-row ${t.completed ? 'done' : ''}"><div class="g-name" title="${h(t.title + '\n' + tip + (atip ? '\n実績 ' + atip : ''))}" onclick="openTaskEdit('${t.id}')">${h(t.title)}${warnBadge(t)}</div>${cells}</div>`;
 }
 function renderGantt(con) {
@@ -838,7 +848,7 @@ function renderGantt(con) {
   const missHtml = `<div class="g-sec">未配置の約束（意思◎〇・${weekRangeLabel(ws)}が対象週）${miss.length ? `：${miss.length}件` : ''}</div>` + (miss.length
     ? miss.map(t => `<div class="g-miss"><span class="intent i${t.intent === '◎' ? '1' : '2'}">${h(t.intent)}</span><span class="ttl" title="${h(t.title)}" onclick="openTaskEdit('${t.id}')">${h(t.title)}</span><span class="${dueOver(t) ? 'empty over' : 'empty'}">${t.dueDate ? '〆 ' + fmtMD(t.dueDate) : '〆 なし'}</span></div>`).join('')
     : '<div class="empty" style="padding:4px 6px">置き忘れはありません</div>');
-  const legend = anyAct ? `<div class="g-legend">セル下の帯＝振り返りの実績：<span class="g-act ok">○</span>実施 <span class="g-act part">△</span>一部 <span class="g-act ng">×</span>未達（同じ日に複数あれば最も悪い結果）。計画があって帯が無い日は、「未記録」と「やらなかった」を区別できません。</div>` : '';
+  const legend = anyAct ? `<div class="g-legend">セル下の帯＝振り返りの実績：<span class="g-act ok">○</span>実施 <span class="g-act part">△</span>一部 <span class="g-act ng">×</span>未達（同じ日に複数あれば最も悪い結果）。帯が2つ並ぶ日は、成否の帯と別に、付け替えで実施した分（○）があります。計画があって帯が無い日は、「未記録」と「やらなかった」を区別できません。</div>` : '';
   // 実績レコード：その週に日付のある取り込みレコードを、日付＋開始時刻の順に（読み取り専用。やったことはホバー）
   const wdays = new Set(days);
   const recs = S.tasks.filter(t => t.record && kindOf(t) === VIEW_KIND && wdays.has(t.dueDate))
