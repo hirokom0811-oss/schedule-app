@@ -97,6 +97,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 .g-c .g-act.ok, .g-legend .g-act.ok { background: #2e9e5b; color: #fff; }
 .g-c .g-act.part, .g-legend .g-act.part { background: #f2c84b; color: #4a3a00; }
 .g-c .g-act.ng, .g-legend .g-act.ng { background: var(--danger); color: #fff; }
+.rv-also-i { font-size: 12px; color: #2e7d4f; margin: 2px 0 4px; }
 .g-c .g-act.hl { right: calc(50% + 1px); }
 .g-c .g-act.hr { left: calc(50% + 1px); }
 .g-legend { font-size: 11px; color: var(--muted); margin: 6px 2px 0; }
@@ -315,7 +316,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 
 <script>
 'use strict';
-const APP_VERSION = 'v2.4.2';
+const APP_VERSION = 'v2.4.3';
 const GIST_FILE = 'schedule_data.json';
 const DAY_START = 6, DAY_END = 23;       // 表示する時間帯
 // 拡大レベル：1時間の高さ(px)と、ドラッグの刻み(分)。拡大するほど細かく動かせる（Shift押下中は5分）
@@ -1736,7 +1737,20 @@ function addReviewTask(i) {
 function toggleDone(i, id, el) {
   const it = _rv.items[i]; const k = it.done.indexOf(id); if (k >= 0) it.done.splice(k, 1); else it.done.push(id);
   if (el) { el.closest('.rv-opt').classList.toggle('on', k < 0); const s = document.getElementById('rv-sel-' + i); if (s) s.textContent = `${it.done.length}件選択中`; }
+  rvRefreshAlso();
 }
+// v2.4.3：ほかの項目の「実際にやったタスク」に、この項目のタスクが入っていれば、「付け替えでも実施」の注記を出す（表示だけ。保存データは変えない）。
+// 数えるのは、保存でdoneTaskIdsに残る項目（×で付け替え選択中／付け替え済み）だけ。自分自身の項目・同じタスクの項目・「戻す」にした項目は数えない。taskIdの無い項目には出さない
+function rvAlsoHtml(i) {
+  const me = _rv.items[i]; if (!me || !me.taskId) return '';
+  const names = [];
+  _rv.items.forEach((x, j) => {
+    if (j === i || x.undo || x.taskId === me.taskId) return;
+    if ((wantsRelink(x) || x.relinked) && (x.done || []).includes(me.taskId) && !names.includes(x.title)) names.push(x.title);
+  });
+  return names.length ? `<div class="rv-also-i">○ この日、付け替えでも実施（元の枠：${names.map(h).join('／')}）</div>` : '';
+}
+function rvRefreshAlso() { _rv.items.forEach((_, i) => { const el = document.getElementById('rv-also-' + i); if (el) el.innerHTML = rvAlsoHtml(i); }); }
 function toggleUndo(i) { const it = _rv.items[i]; it.undo = !it.undo; renderReview(); }
 const RV_EX = [['relink', '付け替え'], ['sudden', '突発'], ['minor', '小物']];
 const RV_MARK = { good: '○', partial: '△', bad: '×' };
@@ -1745,13 +1759,13 @@ function reviewItemHtml(it, i) {
   if (it.promise) {
     // 約束枠：○×は任意。何も選ばなければ「計画どおり」として扱う（○＝手を付けた／×＝手を付けず）。△は選べない（過去の記録で△のものは、印だけ残す）
     const legacy = it.result === 'partial' ? `<span class="rv-legacy">以前の記録：△</span>` : '';
-    return `<div class="rv-item"><div class="rt"><span class="rv-tag">約束</span>${it.slot} ${h(it.title)}</div>
+    return `<div class="rv-item"><div class="rt"><span class="rv-tag">約束</span>${it.slot} ${h(it.title)}</div><div id="rv-also-${i}">${rvAlsoHtml(i)}</div>
       <div class="rv-btns">${[['good', '○'], ['bad', '×']].map(([v, l]) => `<button class="btn ${it.result === v ? 'sel-' + v : ''}" onclick="setResult(${i},'${v}')">${l}</button>`).join('')}${legacy}<span class="rv-hint">未選択＝計画どおり／×＝手を付けず（付け替えを選べます）</span></div>
       <input ${inp} placeholder="理由（任意）" value="${h(it.comment)}" oninput="_rv.items[${i}].comment=this.value">${reviewDoneHtml(it, i)}</div>`;
   }
   // 自由枠（約束タスクの入っていない枠）：○×も一言も出さない。例外（付け替え／突発／小物）の記録欄だけ。過去の記録の○△×・一言は、保存しても消えない（印だけ見せる）
   const old = it.result ? `<span class="rv-legacy">以前の記録：${RV_MARK[it.result]}</span>` : '';
-  return `<div class="rv-item"><div class="rt">${it.slot} ${h(it.title)}${old}</div>
+  return `<div class="rv-item"><div class="rt">${it.slot} ${h(it.title)}${old}</div><div id="rv-also-${i}">${rvAlsoHtml(i)}</div>
     <div class="rv-btns rv-ex"><span class="rv-hint">例外</span>${RV_EX.map(([v, l]) => `<button class="btn btn-sm ${it.exKind === v ? 'sel-ex' : ''}" onclick="setEx(${i},'${v}')">${l}</button>`).join('')}</div>
     ${it.exKind === 'sudden' || it.exKind === 'minor' ? `<input ${inp} placeholder="${it.exKind === 'sudden' ? '突発：何が入ったか（1行）' : '小物：何をしたか（1行）'}" value="${h(it.exText)}" oninput="_rv.items[${i}].exText=this.value">` : ''}${reviewDoneHtml(it, i)}</div>`;
 }
