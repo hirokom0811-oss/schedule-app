@@ -91,6 +91,17 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 .chain { color: var(--muted); font-size: 11px; }
 .chip { display: inline-flex; align-items: center; gap: 4px; background: var(--primary-soft); border-radius: 12px; padding: 1px 4px 1px 8px; margin: 0 4px 4px 0; font-size: 12px; }
 .chip a { color: var(--muted); text-decoration: none; padding: 0 3px; }
+.g-c.has-act { min-height: 38px; }
+.g-c.has-act.mid::before, .g-c.has-act.on::before { bottom: 15px; }
+.g-c .g-act { position: absolute; left: 2px; right: 2px; bottom: 2px; height: 11px; border-radius: 3px; font-size: 9px; line-height: 11px; text-align: center; font-weight: 700; z-index: 1; cursor: help; }
+.g-c .g-act.ok, .g-legend .g-act.ok { background: #2e9e5b; color: #fff; }
+.g-c .g-act.part, .g-legend .g-act.part { background: #f2c84b; color: #4a3a00; }
+.g-c .g-act.ng, .g-legend .g-act.ng { background: var(--danger); color: #fff; }
+.g-legend { font-size: 11px; color: var(--muted); margin: 6px 2px 0; }
+.g-legend .g-act { position: static; height: 11px; border-radius: 3px; font-size: 9px; line-height: 11px; text-align: center; font-weight: 700; display: inline-block; width: 16px; vertical-align: middle; cursor: default; }
+.g-rec { display: flex; align-items: baseline; gap: 8px; padding: 4px 6px; font-size: 13px; border-bottom: 1px dashed var(--border); }
+.g-rec .when { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.g-rec .ttl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: help; }
 .g-sec { font-size: 12px; font-weight: 600; margin: 12px 0 4px; }
 .g-miss { display: flex; align-items: center; gap: 8px; padding: 4px 6px; font-size: 13px; border-bottom: 1px dashed var(--border); }
 .g-miss .ttl { cursor: pointer; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -302,7 +313,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 
 <script>
 'use strict';
-const APP_VERSION = 'v2.3.1';
+const APP_VERSION = 'v2.4.0';
 const GIST_FILE = 'schedule_data.json';
 const DAY_START = 6, DAY_END = 23;       // 表示する時間帯
 // 拡大レベル：1時間の高さ(px)と、ドラッグの刻み(分)。拡大するほど細かく動かせる（Shift押下中は5分）
@@ -783,30 +794,58 @@ function taskWeekPlacements(t, ws) {
   taskBlocksOf(t).forEach(b => days.forEach(ds => { if (isBlockOnDate(b, ds)) out.push({ ds, b }); }));
   return out.sort((x, y) => (x.ds + x.b.startTime).localeCompare(y.ds + y.b.startTime));
 }
-function ganttRowHtml(t, ws, pl) {
+// 実績（v2.4.0）：振り返り（S.reviews）の項目＝「その日にそのタスクを実際にやった」。タスク×日で集計し、同じ日に複数あれば最も悪い結果に合わせる（bad＞partial＞good・null）
+const ACT_RANK = { bad: 3, partial: 2 };                              // good・null（計画どおり）は 1
+const ACT_VIEW = { 3: { cls: 'ng', sym: '×', word: '未達' }, 2: { cls: 'part', sym: '△', word: '一部' }, 1: { cls: 'ok', sym: '○', word: '実施' } };
+function weekActuals(ws) {                                           // → Map(taskId → Map(日付 → 3|2|1))
+  const days = new Set(Array.from({length: 7}, (_, i) => addDays(ws, i))), out = new Map();
+  S.reviews.forEach(r => { if (!days.has(r.date)) return;
+    (r.items || []).forEach(it => { if (!it.taskId) return;
+      const rk = ACT_RANK[it.result] || 1, m = out.get(it.taskId) || new Map();
+      m.set(r.date, Math.max(m.get(r.date) || 0, rk)); out.set(it.taskId, m); }); });
+  return out;
+}
+const fmtMDs = ds => { const d = parseDate(ds); return `${d.getMonth() + 1}/${d.getDate()}`; };
+function ganttRowHtml(t, ws, pl, act) {
+  act = act || new Map();
   const days = Array.from({length: 7}, (_, i) => addDays(ws, i)), on = new Set(pl.map(p => p.ds));
   const first = days.findIndex(d => on.has(d)), last = days.length - 1 - [...days].reverse().findIndex(d => on.has(d));
   const est = estLabel(t), lab = `${t.intent || ''}${est ? ' ' + est : ''}`.trim();
   const cells = days.map((ds, i) => {
-    const cls = on.has(ds) ? 'on' : (i > first && i < last ? 'mid' : ''), isDue = t.dueDate === ds;
-    const inner = (i === first && lab ? `<span>${h(lab)}</span>` : '') + (isDue ? '<span class="g-due" title="期限">◆</span>' : '');
-    return `<div class="g-c ${cls} ${ds === today() ? 'today' : ''}" ${isDue ? `title="期限 ${fmtMD(ds)}"` : ''}>${inner}</div>`;
+    const cls = on.has(ds) ? 'on' : (i > first && i < last ? 'mid' : ''), isDue = t.dueDate === ds, a = act.get(ds) ? ACT_VIEW[act.get(ds)] : null;
+    const inner = (i === first && lab ? `<span>${h(lab)}</span>` : '') + (isDue ? '<span class="g-due" title="期限">◆</span>' : '')
+      + (a ? `<span class="g-act ${a.cls}" title="実績 ${fmtMDs(ds)} ${a.sym}（${a.word}）">${a.sym}</span>` : '');
+    return `<div class="g-c ${cls} ${a ? 'has-act' : ''} ${ds === today() ? 'today' : ''}" ${isDue ? `title="期限 ${fmtMD(ds)}"` : ''}>${inner}</div>`;
   }).join('');
   const tip = pl.map(p => `${fmtMD(p.ds)} ${p.b.startTime}–${p.b.endTime}${allocOf(t, p.b.id) !== null ? '（' + allocOf(t, p.b.id) + '分）' : ''}`).join(' / ');
-  return `<div class="g-row ${t.completed ? 'done' : ''}"><div class="g-name" title="${h(t.title + '\n' + tip)}" onclick="openTaskEdit('${t.id}')">${h(t.title)}${warnBadge(t)}</div>${cells}</div>`;
+  const atip = [...act.keys()].sort().map(ds => `${fmtMDs(ds)} ${ACT_VIEW[act.get(ds)].sym}`).join('、');
+  return `<div class="g-row ${t.completed ? 'done' : ''}"><div class="g-name" title="${h(t.title + '\n' + tip + (atip ? '\n実績 ' + atip : ''))}" onclick="openTaskEdit('${t.id}')">${h(t.title)}${warnBadge(t)}</div>${cells}</div>`;
 }
 function renderGantt(con) {
   const ws = viewWeek(), days = Array.from({length: 7}, (_, i) => addDays(ws, i));
   const leaves = S.tasks.filter(t => !isParent(t) && kindOf(t) === VIEW_KIND);
-  const rows = leaves.map(t => ({ t, pl: taskWeekPlacements(t, ws) })).filter(r => r.pl.length)
-    .sort((a, b) => (a.pl[0].ds + a.pl[0].b.startTime).localeCompare(b.pl[0].ds + b.pl[0].b.startTime) || (a.t.dueDate || '9999').localeCompare(b.t.dueDate || '9999'));
+  const actAll = weekActuals(ws);
+  // 取り込みレコード（record:true）は計画行から外し、下段の「実績レコード」へ。計画が無くても、その週に実績（振り返り）があるタスクは行に出す（計画外の実施）
+  const rows = leaves.filter(t => !t.record).map(t => ({ t, pl: taskWeekPlacements(t, ws), act: actAll.get(t.id) || new Map() })).filter(r => r.pl.length || r.act.size)
+    .map(r => ({ ...r, key: r.pl.length ? r.pl[0].ds + r.pl[0].b.startTime : [...r.act.keys()].sort()[0] + '~' }))
+    .sort((a, b) => a.key.localeCompare(b.key) || (a.t.dueDate || '9999').localeCompare(b.t.dueDate || '9999'));
+  const anyAct = rows.some(r => r.act.size);
   const head = `<div class="g-row g-head"><div>${KIND_LABEL[VIEW_KIND]}・${rows.length}件</div>${days.map(ds => `<div class="${ds === today() ? 'today' : ''}">${fmtMD(ds)}</div>`).join('')}</div>`;
   // 未配置の約束：その週が対象週で、意思が◎〇なのに、どの枠にも入っていないもの（月曜に置き忘れていないかの確認）
   const miss = sortRanked(leaves.filter(t => t.week === ws && (t.intent === '◎' || t.intent === '〇') && !t.completed && !isPlaced(t)));
   const missHtml = `<div class="g-sec">未配置の約束（意思◎〇・${weekRangeLabel(ws)}が対象週）${miss.length ? `：${miss.length}件` : ''}</div>` + (miss.length
     ? miss.map(t => `<div class="g-miss"><span class="intent i${t.intent === '◎' ? '1' : '2'}">${h(t.intent)}</span><span class="ttl" title="${h(t.title)}" onclick="openTaskEdit('${t.id}')">${h(t.title)}</span><span class="${dueOver(t) ? 'empty over' : 'empty'}">${t.dueDate ? '〆 ' + fmtMD(t.dueDate) : '〆 なし'}</span></div>`).join('')
     : '<div class="empty" style="padding:4px 6px">置き忘れはありません</div>');
-  con.innerHTML = `<div class="gantt"><div class="g-grid">${head}${rows.length ? rows.map(r => ganttRowHtml(r.t, ws, r.pl)).join('') : '<div class="empty" style="padding:12px 6px">この週に配置されたタスクはありません</div>'}</div>${missHtml}</div>`;
+  const legend = anyAct ? `<div class="g-legend">セル下の帯＝振り返りの実績：<span class="g-act ok">○</span>実施 <span class="g-act part">△</span>一部 <span class="g-act ng">×</span>未達（同じ日に複数あれば最も悪い結果）。計画があって帯が無い日は、「未記録」と「やらなかった」を区別できません。</div>` : '';
+  // 実績レコード：その週に日付のある取り込みレコードを、日付＋開始時刻の順に（読み取り専用。やったことはホバー）
+  const wdays = new Set(days);
+  const recs = S.tasks.filter(t => t.record && kindOf(t) === VIEW_KIND && wdays.has(t.dueDate))
+    .sort((a, b) => (a.dueDate + ((recSpan(a) || {}).start || '')).localeCompare(b.dueDate + ((recSpan(b) || {}).start || '')));
+  const recHtml = `<div class="g-sec">実績レコード（${weekRangeLabel(ws)}・取り込み）${recs.length ? `：${recs.length}件` : ''}</div>` + (recs.length
+    ? recs.map(t => { const sp = recSpan(t), did = recDid(t);
+        return `<div class="g-rec"><span class="when">${fmtMD(t.dueDate)} ${sp ? sp.start + '–' + sp.end : '時刻なし'}</span><span class="ttl" title="${h(did.length ? 'やったこと：\n・' + did.join('\n・') : 'やったこと：なし')}">${h(t.title)}</span></div>`; }).join('')
+    : '<div class="empty" style="padding:4px 6px">この週の実績レコードはありません</div>');
+  con.innerHTML = `<div class="gantt"><div class="g-grid">${head}${rows.length ? rows.map(r => ganttRowHtml(r.t, ws, r.pl, r.act)).join('') : '<div class="empty" style="padding:12px 6px">この週に配置されたタスクはありません</div>'}</div>${legend}${missHtml}${recHtml}</div>`;
 }
 
 function renderMonth(con) {
