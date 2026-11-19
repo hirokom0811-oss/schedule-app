@@ -128,7 +128,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 .blk .fillb { position: absolute; right: 3px; bottom: 6px; font-size: 10px; font-weight: 700; background: #16a34a; color: #fff; border-radius: 3px; padding: 0 5px; pointer-events: none; z-index: 2; line-height: 1.5; }
 .blk .fillb.over { background: #dc2626; }
 .blk .rvb { position: absolute; left: 3px; bottom: 6px; font-size: 11px; font-weight: 700; background: #fff; border: 1px solid var(--border); border-radius: 3px; padding: 0 4px; pointer-events: none; z-index: 2; line-height: 1.4; letter-spacing: 1px; }
-.blk .rvb .rv-good { color: #16a34a; } .blk .rvb .rv-partial { color: #d97706; } .blk .rvb .rv-bad { color: #dc2626; }
+.blk .rvb .rv-good { color: #16a34a; } .blk .rvb .rv-partial { color: #d97706; } .blk .rvb .rv-bad { color: #dc2626; } .blk .rvb .rv-relink { color: #7c3aed; }
 .blk.tiny .rvb { display: none; }
 .blk.tiny .fillb { display: none; }
 .blk .tag { position: absolute; top: 1px; right: 14px; font-size: 9px; background: #fff; border: 1px solid var(--warn); color: var(--warn); border-radius: 3px; padding: 0 3px; cursor: pointer; }
@@ -223,6 +223,10 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 .rv-btns button.sel-good { background: #dcfce7; border-color: var(--ok); }
 .rv-btns button.sel-partial { background: #fef3c7; border-color: var(--warn); }
 .rv-btns button.sel-bad { background: #fee2e2; border-color: var(--danger); }
+.rv-btns button.rv-rl-btn { width: auto; font-size: 13px; padding: 2px 10px; white-space: nowrap; }
+.rv-btns button.sel-relink { background: #ede9fe; border-color: #7c3aed; }
+.rv-item.rv-rl { border-left: 4px solid #7c3aed; background: #faf8ff; }
+.rv-tag.rv-tag-rl { color: #5b21b6; background: #ede9fe; }
 .rv-done { margin: 6px 0 4px; font-size: 12px; }
 .rv-done .lbl { color: #6b7280; margin-bottom: 2px; }
 .rv-list { max-height: 190px; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; background: #fff; }
@@ -316,7 +320,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 
 <script>
 'use strict';
-const APP_VERSION = 'v2.4.3';
+const APP_VERSION = 'v2.4.4';
 const GIST_FILE = 'schedule_data.json';
 const DAY_START = 6, DAY_END = 23;       // 表示する時間帯
 // 拡大レベル：1時間の高さ(px)と、ドラッグの刻み(分)。拡大するほど細かく動かせる（Shift押下中は5分）
@@ -376,7 +380,7 @@ const S = {
   tasks: [],         // {id,title,dueDate,priority,scale,completed,blockIds[],memo,...}
   blockTemplates: [],// {id,title,startTime,endTime,theme}
   themes: DEFAULT_THEMES.slice(),
-  reviews: [],       // {id,date,items:[{blockId,taskId,title,result:'good'|'partial'|'bad'|null,comment}],memo,createdAt}
+  reviews: [],       // {id,date,items:[{blockId,taskId,title,result:'good'|'partial'|'bad'|'relink'|null,comment}],memo,createdAt}
   proposals: [],     // {id,date,kind:'link'|'move',taskId,blockId,toDate,toStart,toEnd,reason,status:'pending'|'approved'|'dismissed',createdAt}
   changes: [],       // {id,at,blockId,kind,before,after}
   confirmedWeeks: [], // 確定した週の月曜の日付（その週の候補を、候補の欄から隠す）。仕事の分（旧データもこれ）
@@ -537,7 +541,7 @@ function reviewBadge(b, ds) {
   const r = S.reviews.find(x => x.date === ds); if (!r) return '';
   const its = (r.items || []).filter(it => it.blockId === b.id && it.result);
   if (!its.length) return '';
-  const mark = { good: '○', partial: '△', bad: '×' };
+  const mark = { good: '○', partial: '△', bad: '×', relink: '↪' };
   const tip = its.map(it => `${mark[it.result]} ${it.title}${it.comment ? '：' + it.comment : ''}`).join(' / ');
   return `<span class="rvb" title="${h(tip)}">${its.map(it => `<span class="rv-${it.result}">${mark[it.result]}</span>`).join('')}</span>`;
 }
@@ -798,7 +802,7 @@ function taskWeekPlacements(t, ws) {
   return out.sort((x, y) => (x.ds + x.b.startTime).localeCompare(y.ds + y.b.startTime));
 }
 // 実績（v2.4.0）：振り返り（S.reviews）の項目＝「その日にそのタスクを実際にやった」。タスク×日で集計し、同じ日に複数あれば最も悪い結果に合わせる（bad＞partial＞good・null）
-const ACT_RANK = { bad: 3, partial: 2 };                              // good・null（計画どおり）は 1
+const ACT_RANK = { bad: 3, relink: 3, partial: 2 };                              // good・null（計画どおり）は 1
 const ACT_VIEW = { 3: { cls: 'ng', sym: '×', word: '未達' }, 2: { cls: 'part', sym: '△', word: '一部' }, 1: { cls: 'ok', sym: '○', word: '実施' } };
 // 集計は2チャンネル（v2.4.2）：res＝成否（項目のtaskIdのresult。タスク×日で最も悪い結果＝3|2|1、無ければ0）／did＝実施（他の項目のdoneTaskIdsに入っている＝付け替えで実際にやった）。
 // 種類の違う記録なので競わせない（v2.4.1は○が×に潰れていた）
@@ -1649,8 +1653,10 @@ function confirmWeek() {
 let _rv = null;
 // 約束枠の項目＝意思（◎〇）の付いたタスク。付け替え済みで元のタスクが枠から外れていても、タスク自体の意思で判定する
 const isPromiseTask = id => !!(id && taskById(id)?.intent);
-// 付け替え（実際にやったタスクを選ぶ入口）を開くか：約束枠は×のとき、それ以外は「例外：付け替え」を選んだとき
-const wantsRelink = it => it.promise ? it.result === 'bad' : it.exKind === 'relink';
+// 付け替え（実際にやったタスクを選ぶ入口）を開くか：約束枠は「付け替え」状態（result:'relink'）のとき、それ以外は「例外：付け替え」を選んだとき
+const wantsRelink = it => it.promise ? it.result === 'relink' : it.exKind === 'relink';
+// v2.4.4：旧データの読み替え。×（bad）で付け替えの実績（relinked か doneTaskIds）があるものは、付け替え状態として開く（保存データは書き換えない）
+const rvNormResult = x => (x.result === 'bad' && (x.relinked || (x.doneTaskIds || []).length)) ? 'relink' : x.result;
 function openReview() {
   const ds = S.cur;
   const existing = S.reviews.find(r => r.date === ds);
@@ -1669,7 +1675,7 @@ function openReview() {
   items.forEach(it => {
     const prev = existing && existing.items.find(x => x.blockId === it.blockId && x.taskId === it.taskId);
     it.promise = isPromiseTask(it.taskId);                                    // 約束枠＝意思（◎〇）の付いたタスクを持つ枠。○×を出すのはここだけ
-    it.result = prev ? prev.result : null; it.comment = prev ? prev.comment || '' : '';
+    it.result = prev ? rvNormResult(prev) : null; it.comment = prev ? prev.comment || '' : '';
     it.done = prev && prev.doneTaskIds ? prev.doneTaskIds.slice() : [];
     it.exKind = prev && prev.exception ? prev.exception.kind : null; it.exText = prev && prev.exception ? prev.exception.text || '' : '';
     if (!prev && it.promise && taskById(it.taskId)?.completed) it.result = 'good';
@@ -1677,7 +1683,7 @@ function openReview() {
   // 付け替え済みの項目：枠のいまのタスクからは作れない（元のタスクは枠から外れている）ので、保存済みの記録から足す
   if (existing) existing.items.filter(x => x.relinked && blockById(x.blockId) && isBlockOnDate(blockById(x.blockId), ds) && !items.some(i => i.blockId === x.blockId && i.taskId === x.taskId)).forEach(x => {
     const b = blockById(x.blockId);
-    items.push({ blockId: x.blockId, taskId: x.taskId, title: x.title, slot: `${b.startTime}–${b.endTime}`, result: x.result, comment: x.comment || '', done: (x.doneTaskIds || []).slice(),
+    items.push({ blockId: x.blockId, taskId: x.taskId, title: x.title, slot: `${b.startTime}–${b.endTime}`, result: rvNormResult(x), comment: x.comment || '', done: (x.doneTaskIds || []).slice(),
       promise: isPromiseTask(x.taskId), exKind: x.exception ? x.exception.kind : null, exText: x.exception ? x.exception.text || '' : '', relinked: { ...x.relinked, addedIds: (x.relinked.addedIds || []).slice() }, undo: false });
   });
   items.sort((a, b) => a.slot.localeCompare(b.slot));
@@ -1753,18 +1759,19 @@ function rvAlsoHtml(i) {
 function rvRefreshAlso() { _rv.items.forEach((_, i) => { const el = document.getElementById('rv-also-' + i); if (el) el.innerHTML = rvAlsoHtml(i); }); }
 function toggleUndo(i) { const it = _rv.items[i]; it.undo = !it.undo; renderReview(); }
 const RV_EX = [['relink', '付け替え'], ['sudden', '突発'], ['minor', '小物']];
-const RV_MARK = { good: '○', partial: '△', bad: '×' };
+const RV_MARK = { good: '○', partial: '△', bad: '×', relink: '付け替え' };
 function reviewItemHtml(it, i) {
   const inp = 'style="width:100%;padding:5px 7px;border:1px solid var(--border);border-radius:6px;font:inherit"';
   if (it.promise) {
     // 約束枠：○×は任意。何も選ばなければ「計画どおり」として扱う（○＝手を付けた／×＝手を付けず）。△は選べない（過去の記録で△のものは、印だけ残す）
     const legacy = it.result === 'partial' ? `<span class="rv-legacy">以前の記録：△</span>` : '';
-    return `<div class="rv-item"><div class="rt"><span class="rv-tag">約束</span>${it.slot} ${h(it.title)}</div><div id="rv-also-${i}">${rvAlsoHtml(i)}</div>
-      <div class="rv-btns">${[['good', '○'], ['bad', '×']].map(([v, l]) => `<button class="btn ${it.result === v ? 'sel-' + v : ''}" onclick="setResult(${i},'${v}')">${l}</button>`).join('')}${legacy}<span class="rv-hint">未選択＝計画どおり／×＝手を付けず（付け替えを選べます）</span></div>
+    const isRl = it.result === 'relink';
+    return `<div class="rv-item ${isRl ? 'rv-rl' : ''}"><div class="rt"><span class="rv-tag">約束</span>${isRl ? '<span class="rv-tag rv-tag-rl">付け替え</span>' : ''}${it.slot} ${h(it.title)}</div><div id="rv-also-${i}">${rvAlsoHtml(i)}</div>
+      <div class="rv-btns">${[['good', '○', ''], ['bad', '×', ''], ['relink', '付け替え', 'rv-rl-btn']].map(([v, l, c]) => `<button class="btn ${c} ${it.result === v ? 'sel-' + v : ''}" onclick="setResult(${i},'${v}')">${l}</button>`).join('')}${legacy}<span class="rv-hint">未選択＝計画どおり／×＝手を付けず／付け替え＝代わりにやったタスクを選べます（○×は不要）</span></div>
       <input ${inp} placeholder="理由（任意）" value="${h(it.comment)}" oninput="_rv.items[${i}].comment=this.value">${reviewDoneHtml(it, i)}</div>`;
   }
   // 自由枠（約束タスクの入っていない枠）：○×も一言も出さない。例外（付け替え／突発／小物）の記録欄だけ。過去の記録の○△×・一言は、保存しても消えない（印だけ見せる）
-  const old = it.result ? `<span class="rv-legacy">以前の記録：${RV_MARK[it.result]}</span>` : '';
+  const old = it.result && it.result !== 'relink' ? `<span class="rv-legacy">以前の記録：${RV_MARK[it.result]}</span>` : '';
   return `<div class="rv-item"><div class="rt">${it.slot} ${h(it.title)}${old}</div><div id="rv-also-${i}">${rvAlsoHtml(i)}</div>
     <div class="rv-btns rv-ex"><span class="rv-hint">例外</span>${RV_EX.map(([v, l]) => `<button class="btn btn-sm ${it.exKind === v ? 'sel-ex' : ''}" onclick="setEx(${i},'${v}')">${l}</button>`).join('')}</div>
     ${it.exKind === 'sudden' || it.exKind === 'minor' ? `<input ${inp} placeholder="${it.exKind === 'sudden' ? '突発：何が入ったか（1行）' : '小物：何をしたか（1行）'}" value="${h(it.exText)}" oninput="_rv.items[${i}].exText=this.value">` : ''}${reviewDoneHtml(it, i)}</div>`;
@@ -1822,7 +1829,7 @@ function saveReview() {
   const have = new Set(r.items.map(key));
   // 今回の一覧に出なかった過去の記録（以前は全枠を出していたため、繰り返しの枠などに残っている）は、消さずに引き継ぐ
   const carry = (prevRec ? prevRec.items : []).filter(x => !have.has(key(x)) && !x.relinked && blockById(x.blockId) && isBlockOnDate(blockById(x.blockId), r.date) && (x.result || x.comment || x.exception));
-  const rec = { id: uuid(), date: r.date, items: r.items.filter(keep).map(it => ({ blockId: it.blockId, taskId: it.taskId, title: it.title, result: it.result, comment: it.comment,
+  const rec = { id: uuid(), date: r.date, items: r.items.filter(keep).map(it => ({ blockId: it.blockId, taskId: it.taskId, title: it.title, result: (it.result === 'relink' && !it.relinked && !(it.done || []).length) ? 'bad' : it.result, comment: it.comment,
     doneTaskIds: (wantsRelink(it) || it.relinked) ? it.done : [], relinked: it.relinked || null, exception: exOf(it) })).concat(carry), memo: r.memo, createdAt: new Date().toISOString() };
   const i = S.reviews.findIndex(x => x.date === r.date);
   if (i >= 0) { rec.id = S.reviews[i].id; S.reviews[i] = rec; } else S.reviews.push(rec);
