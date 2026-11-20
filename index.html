@@ -320,7 +320,7 @@ main { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
 
 <script>
 'use strict';
-const APP_VERSION = 'v2.4.5';
+const APP_VERSION = 'v2.4.6';
 const GIST_FILE = 'schedule_data.json';
 const DAY_START = 6, DAY_END = 23;       // 表示する時間帯
 // 拡大レベル：1時間の高さ(px)と、ドラッグの刻み(分)。拡大するほど細かく動かせる（Shift押下中は5分）
@@ -1382,7 +1382,7 @@ function openTaskEdit(id, back) {
     ${parentOf(t) ? `<div class="row"><label>親</label><span>${h(parentOf(t).title)}</span></div>` : ''}
     ${t.record && (recDid(t).length || recSpan(t)) ? `<div class="row" style="align-items:flex-start"><label>実績</label><div style="flex:1;min-width:0">${recSpan(t) ? `<div class="empty">${recSpan(t).start}–${recSpan(t).end}${t.source ? '　書き込み元：' + h(t.source) : ''}</div>` : ''}${recDidHtml(t) || '<div class="empty">やったこと：なし</div>'}</div></div>` : ''}
     <div class="row"><label>名前</label><input id="te-title" value="${h(t.title)}" placeholder="例：資料の下書き"></div>
-    <div class="row"><label>次にやること</label><input id="te-next" maxlength="200" value="${h(t.nextStep || '')}" placeholder="一歩目を1行で（例：見積の確認）"></div>
+    <div class="row"><label>次にやること</label><input id="te-next" maxlength="200" value="${h(t.nextStep || '')}" placeholder="一歩目を1行で（例：見積の確認）"><label class="chk" style="white-space:nowrap" title="次にやることが済んだらチェック"><input id="te-next-done" type="checkbox" ${t.nextStep && t.nextDone ? 'checked' : ''}> 済</label></div>
     <div class="row"><label>区分</label><select id="te-kind">${sel(kindOf(t), [['work', '仕事'], ['private', 'プライベート']])}</select><span class="empty">プライベートは、プライベートの枠にだけ入ります</span></div>
     <div class="row"><label>意思</label><select id="te-intent">${sel(t.intent, [['', '（なし）'], ['◎', '◎'], ['〇', '〇']])}</select></div>
     <div class="row"><label>見積(h)</label><input id="te-est" type="number" step="0.25" min="0" inputmode="decimal" value="${t.estimateH || ''}" placeholder="例：2.25"></div>
@@ -1410,6 +1410,7 @@ function saveTaskEdit() {
     week: document.getElementById('te-week').value ? weekStart(document.getElementById('te-week').value) : null,
     kind: document.getElementById('te-kind').value === 'private' ? 'private' : undefined,
     nextStep: document.getElementById('te-next').value.trim() || undefined,       // 次にやること（1行・任意。memoとは別のキー）
+    nextDone: document.getElementById('te-next').value.trim() && document.getElementById('te-next-done').checked ? true : undefined,   // 次にやることの完了チェック（文が空ならチェックも持たない）
     blockedBy: _teBlocked.length ? _teBlocked.slice() : undefined };
   if (_te && _teBlocked.some(x => wouldCycle(_te, x))) { showToast('前提が回ってしまう（循環する）ので、保存できません'); return; }
   if (d.estimateH) d.scale = scaleFromMin(Math.round(d.estimateH * 60));        // 見積があれば、大きさもそれに合わせる
